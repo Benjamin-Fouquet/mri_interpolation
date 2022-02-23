@@ -28,7 +28,7 @@ import torch
 import torchio as tio
 
 # local modules
-from network import ThreeDCNN, Unet
+from models import ThreeDCNN, Unet
 from torch.utils.data import DataLoader
 
 if __name__ == "__main__":
@@ -122,9 +122,9 @@ if __name__ == "__main__":
         default=True,
     )
     parser.add_argument(
-        "-m",
-        "--model",
-        help="model used for interpolation",
+        "-arch",
+        "--architecture",
+        help="architecture used for interpolation",
         type=str,
         required=False,
         default="ThreeDCNN",
@@ -142,7 +142,7 @@ if __name__ == "__main__":
     epochs = args.epochs
     activation_func = args.activation_func
     logging = args.logging
-    model = args.model
+    architecture = args.architecture
 
 num_workers = multiprocessing.cpu_count()
 device = [2] if torch.cuda.is_available() else []
@@ -166,7 +166,7 @@ xp_parameters = {
     "sample_per_volume": samples_per_volume,
     "n_max_subjects": n_max_subjects,
     "test_subject": None, #to add
-    "model": model,
+    "model": architecture,
 }
 
 subjects = []
@@ -190,13 +190,13 @@ for mask in all_masks:
     subjects.append(subject)
 
 
-if model == "ThreeDCNN":
+if architecture == "ThreeDCNN":
     transforms = [
         tio.RescaleIntensity(out_min_max=(0, 1)),
         # tio.transforms.ZNormalization(masking_method='label'),
         # tio.RandomAffine()
     ]
-if model == "Unet":
+if architecture == "Unet":
     transforms = [
         tio.RescaleIntensity(out_min_max=(0, 1)),
         #for Unet
@@ -256,20 +256,20 @@ patches_loader = DataLoader(
 # aggregator = tio.inference.GridAggregator(sampler=grid_sampler, overlap_mode='average')
 
 dataloader = DataLoader(
-    subjects_dataset, num_workers=num_workers, batch_size=1
+    dataset=subjects_dataset, num_workers=num_workers, batch_size=1
 )  # used for test
 
 
-if model =="ThreeDCNN":
-    network = ThreeDCNN(
+if architecture =="ThreeDCNN":
+    model = ThreeDCNN(
         num_channels=num_channels,
         activation_func=activation_func,
         kernel_size=kernel_size,
         xp_parameters=xp_parameters,
         logging=logging,
     )
-if model == "Unet":
-    network = Unet(
+if architecture == "Unet":
+    model = Unet(
         num_channels=num_channels,
         xp_parameters=xp_parameters,
         logging=logging,   
@@ -285,40 +285,40 @@ profiler = AdvancedProfiler()
 trainer = Trainer(profiler=profiler)
 """
 
-trainer.fit(network, train_dataloader=patches_loader)
+trainer.fit(model, train_dataloader=patches_loader)
 
 # transfert model to cpu for test and prediction
 trainer = pl.Trainer(gpus=[])
-trainer.test(network, dataloaders=dataloader)
+trainer.test(model, dataloaders=dataloader)
 
 # add version number to output_path
-output_path = output_path + str(network.logger.version) + "/"
+output_path = output_path + str(model.logger.version) + "/"
 try:
     if not os.path.exists(output_path):
         os.makedirs(output_path)
 except OSError:
     print("Error: Creating directory. " + output_path)
 
-file_tag = f"_{model}_{percentage}_{epochs}_L{num_channels}__{activation_func}"
+file_tag = f"_{architecture}_{percentage}_{epochs}_L{num_channels}__{activation_func}"
 
 torch.save(
-    network.state_dict(),
+    model.state_dict(),
     output_path
     + f"state_dict" + file_tag + ".pt",
 )
 
 #log losses as image
-losses = network.losses
+losses = model.losses
 fig = plt.plot(range(len(losses)), losses)
 plt.savefig(
     output_path
     + f"loss" + file_tag + ".png"
 )
 # Create one output image for visusalisation
-if isinstance(network, ThreeDCNN):
-    pred = network(subject.rn_t2.data.unsqueeze(0))
-if isinstance(network, Unet):
-    pred = network(subject.rn_t2.data[:, :256, :256, :256].unsqueeze(0)) #TODO: coupling, Unet specific
+if isinstance(model, ThreeDCNN):
+    pred = model(subject.rn_t2.data.unsqueeze(0))
+if isinstance(model, Unet):
+    pred = model(subject.rn_t2.data[:, :256, :256, :256].unsqueeze(0)) #TODO: coupling, Unet specific
 image_pred = pred.detach().numpy().squeeze()
 pred_nii_image = nb.Nifti1Image(image_pred, affine=np.eye(4))
 ground_truth_nii_image = nb.Nifti1Image(
@@ -326,13 +326,13 @@ ground_truth_nii_image = nb.Nifti1Image(
 )
 
 nb.save(
-    pred_nii_image,
-    output_path
+    img=pred_nii_image,
+    filename=output_path
     + f"output" + file_tag + ".nii.gz",
 )
 nb.save(
-    ground_truth_nii_image,
-    output_path
+    img=ground_truth_nii_image,
+    filename=output_path
    + f"ground_truth" + file_tag + ".nii.gz",
 )
 
@@ -342,6 +342,9 @@ with open(output_path + 'parameters.txt', 'w') as file:
 
 
 def create_nii(tensor: torch.Tensor, output_name: str) -> None:
+    '''
+    Create nifti from tensor
+    '''
     nii_image = nb.Nifti1Image(tensor[0, ...].detach().numpy(), affine=np.eye(4))
     try:
         nb.save(nii_image, output_name + ".nii.gz")

@@ -64,17 +64,17 @@ class ThreeDCNN(pl.LightningModule):
         layers.append(last_layer)
         self.model = nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
 
-    def loss(self, y_pred, y):
+    def loss(self, y_pred:torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         return nn.functional.mse_loss(y_pred, y)
 
-    def configure_optimizers(self):
+    def configure_optimizers(self) -> torch.optim.Adam:
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         return optimizer
 
-    def log_parameters(self):
+    def log_parameters(self) -> None:
         if self.xp_parameters != None:
             txt_log = ""
             for key, value in enumerate(self.xp_parameters):
