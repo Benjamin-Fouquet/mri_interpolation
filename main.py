@@ -205,7 +205,7 @@ if model == "Unet":
     ]
 
 # mask created before normalisation
-def create_rn_mask(subject, percentage):
+def create_rn_mask(subject: tio.Subject, percentage: int) -> None:
     shape = subject.t2.shape
     rn_mask = torch.FloatTensor(
         np.random.choice(
@@ -336,7 +336,7 @@ nb.save(
 )
 
 
-def create_nii(tensor, output_name):
+def create_nii(tensor: torch.Tensor, output_name: str) -> None:
     nii_image = nb.Nifti1Image(tensor[0, ...].detach().numpy(), affine=np.eye(4))
     try:
         nb.save(nii_image, output_name + ".nii.gz")
@@ -345,7 +345,7 @@ def create_nii(tensor, output_name):
     return None
 
 
-def patch_visu(patches):
+def patch_visu(patches) -> None:
     """
     Simple patch loader from torchiopatch dataloader :: Not possible to in line matplotlib, you may have to save it
     TODO: solve shape problem
