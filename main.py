@@ -17,6 +17,7 @@ import glob
 import multiprocessing
 import os
 import sys
+import json
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -49,7 +50,7 @@ if __name__ == "__main__":
         default="results/",
     )
     parser.add_argument(
-        "-p",
+        "-ps",
         "--patch_size",
         help="Patch size",
         type=int,
@@ -72,7 +73,7 @@ if __name__ == "__main__":
         default=1
     )
     parser.add_argument(
-        "-pct",
+        "-p",
         "--percentage",
         help="Percentage of original image used for learning",
         type=int,
@@ -164,8 +165,8 @@ xp_parameters = {
     "queue_length": queue_length,
     "sample_per_volume": samples_per_volume,
     "n_max_subjects": n_max_subjects,
-    "test_subject": None,
-    "model": model,  # to add
+    "test_subject": None, #to add
+    "model": model,
 }
 
 subjects = []
@@ -334,6 +335,10 @@ nb.save(
     output_path
    + f"ground_truth" + file_tag + ".nii.gz",
 )
+
+#create texte file from parameter dict
+with open(output_path + 'parameters.txt', 'w') as file:
+     file.write(json.dumps(xp_parameters))
 
 
 def create_nii(tensor: torch.Tensor, output_name: str) -> None:
