@@ -124,7 +124,7 @@ if __name__ == "__main__":
         "-m",
         "--model",
         help="model used for interpolation",
-        type=bool,
+        type=str,
         required=False,
         default="ThreeDCNN",
     )
@@ -291,7 +291,7 @@ trainer = pl.Trainer(gpus=[])
 trainer.test(network, dataloaders=dataloader)
 
 # add version number to output_path
-output_path = output_path + str(model.logger.version) + "/"
+output_path = output_path + str(network.logger.version) + "/"
 try:
     if not os.path.exists(output_path):
         os.makedirs(output_path)
@@ -301,13 +301,13 @@ except OSError:
 file_tag = f"_{model}_{percentage}_{epochs}_L{num_channels}__{activation_func}"
 
 torch.save(
-    model.state_dict(),
+    network.state_dict(),
     output_path
     + f"state_dict" + file_tag + ".pt",
 )
 
 #log losses as image
-losses = model.losses
+losses = network.losses
 fig = plt.plot(range(len(losses)), losses)
 plt.savefig(
     output_path

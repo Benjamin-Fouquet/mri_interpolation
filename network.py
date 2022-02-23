@@ -297,7 +297,7 @@ class Unet(pl.LightningModule):
         # log of image, gt and difference before converting to np
         if self.logging:
             #TODO: all metrics, resize to fit ? ~most probably you will not need to as results will be crap
-            # diff = y - y_pred
+            diff = y - y_pred
             ground_truth_grid = torchvision.utils.make_grid(
                 y[..., int(y.shape[-1] / 2)]
             )  # slicing around middle
@@ -306,10 +306,10 @@ class Unet(pl.LightningModule):
                 y_pred[..., int(y.shape[-1] / 2)]
             )  # slicing around middle
             self.logger.experiment.add_image("prediction", pred_grid, 0)
-            # diff_grid = torchvision.utils.make_grid(
-            #     diff[..., 150]
-            # )  # slicing around middle
-            # self.logger.experiment.add_image("differences", diff_grid, 0)
+            diff_grid = torchvision.utils.make_grid(
+                diff[..., int(y.shape[-1] / 2)]
+            )  # slicing around middle
+            self.logger.experiment.add_image("differences", diff_grid, 0)
             mask_grid = torchvision.utils.make_grid(
                 mask[..., int(y.shape[-1] / 2)]
             )  # slicing around middle
@@ -318,9 +318,9 @@ class Unet(pl.LightningModule):
             # detach and log metrics
             y = y.detach().numpy().squeeze()
             y_pred = y_pred.detach().numpy().squeeze()
-            # self.log("MSE", metrics.mean_squared_error(y, y_pred))
-            # self.log("PSNR", metrics.peak_signal_noise_ratio(y, y_pred))
-            # self.log("SSMI", metrics.structural_similarity(y, y_pred))
+            self.log("MSE", metrics.mean_squared_error(y, y_pred))
+            self.log("PSNR", metrics.peak_signal_noise_ratio(y, y_pred))
+            self.log("SSMI", metrics.structural_similarity(y, y_pred))
 
             # Add parameters
             self.log_parameters()
