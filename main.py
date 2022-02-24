@@ -2,13 +2,8 @@
 main for 3D interpolation on mri volumes
 For the moment, test on 1 batch and cpu
 TODO:
--if Unet, result name fucked
-    -find common parameters for both networks
--Add on git for version control, think of structure to keep data outside ?
--The test is performed on cpu, make it at least flexible
--The test can only be performed on batch_size = 1
+-Test patch workflow for test and prediction
 -Id of subjects is parsed using a ugly split, improvement required
--option for patches, so that it appears in parameters
 -2 logs per experiment, one at test one at train...
 -pred on fixe subject for the moment
 """
@@ -243,18 +238,6 @@ patches_loader = DataLoader(
     dataset=patches_queue, batch_size=batch_size, num_workers=0  # must be 0 for patches
 )
 
-###
-# Grid sampler for sampling accross 1 unique volume
-###
-# grid_sampler = tio.inference.GridSampler(
-#     subject,
-#     patch_size,
-#     patch_overlap
-#     )
-
-# patch_loader = torch.utils.data.DataLoader(grid_sampler, batch_size=batch_size, num_workers=num_workers)
-# aggregator = tio.inference.GridAggregator(sampler=grid_sampler, overlap_mode='average')
-
 dataloader = DataLoader(
     dataset=subjects_dataset, num_workers=num_workers, batch_size=1
 )  # used for test
@@ -287,9 +270,9 @@ trainer = Trainer(profiler=profiler)
 
 trainer.fit(model, train_dataloader=patches_loader)
 
-# transfert model to cpu for test and prediction
-trainer = pl.Trainer(gpus=[])
-trainer.test(model, dataloaders=dataloader)
+# # transfert model to cpu for test and prediction
+# trainer = pl.Trainer(gpus=[])
+# trainer.test(model, dataloaders=dataloader)
 
 # add version number to output_path
 output_path = output_path + str(model.logger.version) + "/"
@@ -314,12 +297,37 @@ plt.savefig(
     output_path
     + f"loss" + file_tag + ".png"
 )
-# Create one output image for visusalisation
-if isinstance(model, ThreeDCNN):
-    pred = model(subject.rn_t2.data.unsqueeze(0))
-if isinstance(model, Unet):
-    pred = model(subject.rn_t2.data[:, :256, :256, :256].unsqueeze(0)) #TODO: coupling, Unet specific
-image_pred = pred.detach().numpy().squeeze()
+
+# # Create one output image for visusalisation
+# if isinstance(model, ThreeDCNN):
+#     pred = model(subject.rn_t2.data.unsqueeze(0))
+# if isinstance(model, Unet):
+#     pred = model(subject.rn_t2.data[:, :256, :256, :256].unsqueeze(0)) #TODO: coupling, Unet specific
+# image_pred = pred.detach().numpy().squeeze()
+# pred_nii_image = nb.Nifti1Image(image_pred, affine=np.eye(4))
+# ground_truth_nii_image = nb.Nifti1Image(
+#     subject.t2.data.detach().numpy().squeeze(), affine=np.eye(4)
+# )
+
+#patch based evaluation
+grid_sampler = tio.inference.GridSampler(
+    subject=subject,
+    patch_size=patch_size,
+    patch_overlap=patch_overlap,
+)
+patch_loader = DataLoader(dataset=grid_sampler, batch_size=batch_size)
+aggregator = tio.inference.GridAggregator(sampler=grid_sampler, overlap_mode='average')
+with torch.no_grad():
+    for patches_batch in patch_loader:
+        input_tensor = patches_batch['rn_t2'][tio.DATA]
+        locations = patches_batch[tio.LOCATION]
+        logits = model(input_tensor)
+        labels = logits.argmax(dim=tio.CHANNELS_DIMENSION, keepdim=True)
+        outputs = labels
+        aggregator.add_batch(outputs, locations)
+
+output_tensor = aggregator.get_output_tensor()
+image_pred = output_tensor.detach().numpy().squeeze()
 pred_nii_image = nb.Nifti1Image(image_pred, affine=np.eye(4))
 ground_truth_nii_image = nb.Nifti1Image(
     subject.t2.data.detach().numpy().squeeze(), affine=np.eye(4)
