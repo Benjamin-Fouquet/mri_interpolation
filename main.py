@@ -82,7 +82,7 @@ if __name__ == "__main__":
         nargs="+",
         type=int,
         required=False,
-        default=[64, 64, 64],
+        default=[128, 128],
     )
     parser.add_argument(
         "-k",
@@ -202,6 +202,9 @@ if architecture == "Unet":
 
 # mask created before normalisation
 def create_rn_mask(subject: tio.Subject, percentage: int) -> None:
+    '''
+    Create a random sampling of p % of the original image
+    '''
     shape = subject.t2.shape
     rn_mask = torch.FloatTensor(
         np.random.choice(
@@ -270,9 +273,9 @@ trainer = Trainer(profiler=profiler)
 
 trainer.fit(model, train_dataloader=patches_loader)
 
-# # transfert model to cpu for test and prediction
-# trainer = pl.Trainer(gpus=[])
-# trainer.test(model, dataloaders=dataloader)
+# transfert model to cpu for test and prediction
+trainer = pl.Trainer(gpus=[])
+trainer.test(model, dataloaders=dataloader)
 
 # add version number to output_path
 output_path = output_path + str(model.logger.version) + "/"
@@ -298,40 +301,40 @@ plt.savefig(
     + f"loss" + file_tag + ".png"
 )
 
-# # Create one output image for visusalisation
-# if isinstance(model, ThreeDCNN):
-#     pred = model(subject.rn_t2.data.unsqueeze(0))
-# if isinstance(model, Unet):
-#     pred = model(subject.rn_t2.data[:, :256, :256, :256].unsqueeze(0)) #TODO: coupling, Unet specific
-# image_pred = pred.detach().numpy().squeeze()
-# pred_nii_image = nb.Nifti1Image(image_pred, affine=np.eye(4))
-# ground_truth_nii_image = nb.Nifti1Image(
-#     subject.t2.data.detach().numpy().squeeze(), affine=np.eye(4)
-# )
-
-#patch based evaluation
-grid_sampler = tio.inference.GridSampler(
-    subject=subject,
-    patch_size=patch_size,
-    patch_overlap=patch_overlap,
-)
-patch_loader = DataLoader(dataset=grid_sampler, batch_size=batch_size)
-aggregator = tio.inference.GridAggregator(sampler=grid_sampler, overlap_mode='average')
-with torch.no_grad():
-    for patches_batch in patch_loader:
-        input_tensor = patches_batch['rn_t2'][tio.DATA]
-        locations = patches_batch[tio.LOCATION]
-        logits = model(input_tensor)
-        labels = logits.argmax(dim=tio.CHANNELS_DIMENSION, keepdim=True)
-        outputs = labels
-        aggregator.add_batch(outputs, locations)
-
-output_tensor = aggregator.get_output_tensor()
-image_pred = output_tensor.detach().numpy().squeeze()
+# Create one output image for visusalisation
+if isinstance(model, ThreeDCNN):
+    pred = model(subject.rn_t2.data.unsqueeze(0))
+if isinstance(model, Unet):
+    pred = model(subject.rn_t2.data[:, :256, :256, :256].unsqueeze(0)) #TODO: coupling, Unet specific
+image_pred = pred.detach().numpy().squeeze()
 pred_nii_image = nb.Nifti1Image(image_pred, affine=np.eye(4))
 ground_truth_nii_image = nb.Nifti1Image(
     subject.t2.data.detach().numpy().squeeze(), affine=np.eye(4)
 )
+
+# #patch based evaluation
+# grid_sampler = tio.inference.GridSampler(
+#     subject=subject,
+#     patch_size=patch_size,
+#     patch_overlap=patch_overlap,
+# )
+# patch_loader = DataLoader(dataset=grid_sampler, batch_size=batch_size)
+# aggregator = tio.inference.GridAggregator(sampler=grid_sampler, overlap_mode='average')
+# with torch.no_grad():
+#     for patches_batch in patch_loader:
+#         input_tensor = patches_batch['rn_t2']['data']
+#         locations = patches_batch[tio.LOCATION]
+#         logits = model(input_tensor)
+#         labels = logits.argmax(dim=tio.CHANNELS_DIMENSION, keepdim=True)
+#         outputs = labels
+#         aggregator.add_batch(outputs, locations)
+
+# output_tensor = aggregator.get_output_tensor()
+# image_pred = output_tensor.detach().numpy().squeeze()
+# pred_nii_image = nb.Nifti1Image(image_pred, affine=np.eye(4))
+# ground_truth_nii_image = nb.Nifti1Image(
+#     subject.t2.data.detach().numpy().squeeze(), affine=np.eye(4)
+# )
 
 nb.save(
     img=pred_nii_image,
