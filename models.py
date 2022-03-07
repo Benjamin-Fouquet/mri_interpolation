@@ -24,7 +24,9 @@ class ThreeDCNN(pl.LightningModule):
         activation_func="ReLU",
         xp_parameters=None,
         logging=False,
-        lr = 0.001
+        lr = 0.001,
+        *args,
+        **kwargs,
     ):
         super().__init__()
         self.num_channels = num_channels

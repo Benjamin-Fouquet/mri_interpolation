@@ -6,6 +6,7 @@ TODO:
 -Id of subjects is parsed using a ugly split, improvement required
 -2 logs per experiment, one at test one at train...
 -pred on fixe subject for the moment
+-is patch overlap taken into account using the sampler ?
 """
 import argparse
 import glob
