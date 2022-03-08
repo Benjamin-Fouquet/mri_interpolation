@@ -61,9 +61,9 @@ class MriDataset(Dataset):
 
     def __getitem__(self, idx):
         subject_item = self.subject_ds[idx]
-        obs_mask_item = subject_item["rn_mask"].data.squeeze(0) #coupling
-        obs_item = subject_item["rn_t2"].data.squeeze(0)
-        gt_item = subject_item["t2"].data.squeeze(0)
+        obs_mask_item = subject_item["rn_mask"].data #coupling
+        obs_item = subject_item["rn_t2"].data
+        gt_item = subject_item["t2"].data
         return obs_item, obs_mask_item, gt_item
 
 
@@ -71,8 +71,8 @@ class MriDataModule(pl.LightningDataModule):
     def __init__(
         self,
         mri_path='/home/benjamin/Documents/Datasets/HCP/',
-        patch_size=(64, 64, 64),
-        patch_overlap=(16, 16, 16), 
+        patch_size=(8, 8, 8),
+        patch_overlap=(0, 0, 0), 
         percentage=50,
         *args,
         **kwargs

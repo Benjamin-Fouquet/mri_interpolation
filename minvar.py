@@ -130,7 +130,7 @@ class LitModel(pl.LightningModule):
     
     def loss(self, y_pred, phi_pred, mask, y) -> float:
         mse_loss = nn.MSELoss()
-        phi_loss = mse_loss(y_pred * ~mask, phi_pred * ~ mask)
+        phi_loss = mse_loss(y_pred * (torch.ones(mask.shape) - mask), phi_pred * (torch.ones(mask.shape) - mask)) #TODO: remove double creation of tensor ?
         gt_loss = mse_loss(y_pred * mask, y * mask)
         loss = self.lambda1 * gt_loss + self.lambda2 * phi_loss
         return loss
@@ -150,21 +150,22 @@ class LitModel(pl.LightningModule):
 
 #Runner
 class MiniRunner:
-    def __init__(self, datamodule: pl.LightningDataModule, hyperparameters: Hyperparameters, gpu=2) -> None:
+    def __init__(self, model: pl.LightningModule, datamodule: pl.LightningDataModule, hyperparameters: Hyperparameters, gpu=[2]) -> None:
         self.datamodule = datamodule
         self.datamodule.setup()
         self.hyperparameters = hyperparameters
-        self.gpu = gpu
+        self.gpu = gpu if torch.cuda.is_available() else []
         self.model = model
         self.phi = Phi_CNN(num_channels=hyperparameters.phi_channels, lr=hyperparameters.phi_lr) #you may need the checkpoint
 
     def setup(self):
+        #setup gpu here to avoid problems ?
         pass
 
     def train(self, **trainer_kwargs):
         trainer = pl.Trainer(gpus=self.gpu, max_epochs=1, **trainer_kwargs)
-        trainer.fit(model, train_dataloader=self.datamodule.train_dataloader())
-        return model, trainer
+        trainer.fit(self.model, train_dataloader=self.datamodule.train_dataloader())
+        return self.model, trainer
 
     def val(self):
         pass
@@ -178,8 +179,8 @@ mri_datamodule = MriDataModule()
 mri_datamodule.setup()
 xp_hyperparameters=Hyperparameters(phi_channels=phi_channels, phi_lr=phi_lr) #do you really need parameters when pre trained model ?
 
-runner = MiniRunner(datamodule=mri_datamodule, hyperparameters=xp_hyperparameters)
+runner = MiniRunner(model=LitModel(), datamodule=mri_datamodule, hyperparameters=xp_hyperparameters)
 runner.setup()
-model = LitModel()
+runner.train()
 
 print("Done")
