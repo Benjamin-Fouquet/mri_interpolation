@@ -19,7 +19,7 @@ from skimage import metrics  # mean_squared_error, peak_signal_noise_ratio
 class ThreeDCNN(pl.LightningModule):
     def __init__(
         self,
-        num_channels=(3, 7, 7, 3),
+        num_channels=(128, 128),
         kernel_size=3,
         activation_func="ReLU",
         xp_parameters=None,
@@ -85,8 +85,8 @@ class ThreeDCNN(pl.LightningModule):
             self.logger.experiment.add_text("Data", txt_log)
         return None
 
-    def training_step(self, batch, batch_idx):
-        #TODO: reduce coupling
+    def training_step(self, batch, batch_idx) -> float:
+        #TODO: reduce coupling:: you can reduce coupling by extracting all variables and ditch ou what you don't need. Or do it at datamodule level
         x, y = batch["rn_t2"]["data"], batch["t2"]["data"]
         y_pred = self.forward(x)
         loss = self.loss(y_pred, y)
