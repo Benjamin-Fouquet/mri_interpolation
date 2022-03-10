@@ -10,31 +10,20 @@ from torch.utils.data import Dataset
 
 import matplotlib.pyplot as plt
 
-# grid_sampler = tio.inference.GridSampler(
-#     sub,
-#     patch_size,
-#     patch_overlap
-#     )
-
-#         output_tensor = aggregator.get_output_tensor()
-
-#         tmp = tio.ScalarImage(tensor=output_tensor, affine=sub.T1_image.affine)
-
-# patch_loader = torch.utils.data.DataLoader(grid_sampler, batch_size=batch_size)
-# aggregator = tio.inference.GridAggregator(sampler=grid_sampler, overlap_mode='average')
-
 
 def tensor_visualisation(tensor):
     """
     Take a tensor and display a sample of it
     """
     assert torch.is_tensor(tensor), "Data provided is not a torch tensor"
-    tensor = tensor.detach().cpu()
+    tensor = tensor.detach().cpu().squeeze()
     # tensor = tensor.detach().numpy()
     z, y, x = tensor.shape
     fig, axes = plt.subplots(1, len(tensor))
     for i, slice in enumerate(tensor):
         axes[i].imshow(slice.T, origin="lower")  # cmap="gray"
+        if i == 5:
+            break
     plt.savefig("debug.png")
 
 
@@ -62,7 +51,7 @@ class MriDataset(Dataset):
 
     def __getitem__(self, idx):
         subject_item = self.subject_ds[idx]
-        obs_mask_item = subject_item["rn_mask"].data #coupling
+        obs_mask_item = subject_item["rn_mask"].data  # coupling
         obs_item = subject_item["rn_t2"].data
         gt_item = subject_item["t2"].data
         return obs_item, obs_mask_item, gt_item
@@ -71,9 +60,9 @@ class MriDataset(Dataset):
 class MriDataModule(pl.LightningDataModule):
     def __init__(
         self,
-        mri_path='data/HCP/',
+        mri_path="data/HCP/",
         patch_size=(256, 256, 32),
-        patch_overlap=(16, 16, 16), 
+        patch_overlap=(16, 16, 16),
         percentage=50,
         *args,
         **kwargs
@@ -135,9 +124,9 @@ class MriDataModule(pl.LightningDataModule):
     def get_dataset(self):
         return self.train_ds
 
+
 if __name__ == "__main__":
     mri = MriDataModule()
     mri.setup()
     train_dataloader = mri.train_dataloader()
     data = next(iter(train_dataloader))
-    
