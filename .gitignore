@@ -1,5 +1,5 @@
 results/
-data/
+data/HCP/
 .vscode/
 lightning_logs/
 __pycache__/

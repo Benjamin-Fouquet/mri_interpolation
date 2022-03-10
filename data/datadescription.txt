@@ -1,0 +1,20 @@
+data from quentin:
+batch = list(
+    FloatTensor(2, 5, 200, 200)
+    BoolTensor(2, 5, 200, 200)
+    FloatTensor(2, 5, 200, 200)
+    FloatTensor(2, 5, 200, 200)
+
+)
+
+Data from torchIO:
+batch = dict(
+    batch['t2']['data'], achtung, float64
+    batch['label']['data']
+    batch['rn_t2']['data']
+    batch['rn_mask']['data']
+
+
+
+
+)
