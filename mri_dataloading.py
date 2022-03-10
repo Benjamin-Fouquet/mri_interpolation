@@ -71,7 +71,7 @@ class MriDataset(Dataset):
 class MriDataModule(pl.LightningDataModule):
     def __init__(
         self,
-        mri_path='/home/benjamin/Documents/Datasets/HCP/',
+        mri_path='data/HCP/',
         patch_size=(8, 8, 8),
         patch_overlap=(0, 0, 0), 
         percentage=50,
