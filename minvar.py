@@ -183,7 +183,7 @@ class MiniRunner:
     def create_output(self, subject: tio.Subject, results_path: str='results/') -> None:
         #TODO: change results path
         file_tag = '' #TODO: change it later for nice output design
-        pred = model(subject.rn_t2.data.unsqueeze(0))
+        pred = self.model(subject.rn_t2.data.unsqueeze(0))
         image_pred = pred.detach().numpy().squeeze()
         pred_nii_image = nb.Nifti1Image(image_pred, affine=np.eye(4))
         ground_truth_nii_image = nb.Nifti1Image(
@@ -208,7 +208,7 @@ batch_size = 1
 output_path = 'results/'
 mri_datamodule = MriDataModule()
 mri_datamodule.setup()
-xp_hyperparameters=Hyperparameters(phi_channels=phi_channels, phi_lr=phi_lr, batch_size=batch_size, lr=lr) #do you really need parameters when pre trained model ?
+xp_hyperparameters=Hyperparameters(phi_channels=phi_channels, phi_lr=phi_lr, batch_size=batch_size, lr=lr, epochs=epochs) #do you really need parameters when pre trained model ?
 
 runner = MiniRunner(model=LitModel(), datamodule=mri_datamodule, hyperparameters=xp_hyperparameters)
 runner.setup()
