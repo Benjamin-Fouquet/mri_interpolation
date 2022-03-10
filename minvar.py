@@ -137,7 +137,8 @@ class LitModel(pl.LightningModule):
     
     def loss(self, y_pred, phi_pred, mask, y) -> float:
         mse_loss = nn.MSELoss()
-        phi_loss = mse_loss(y_pred * (torch.ones(mask.shape) - mask), phi_pred * (torch.ones(mask.shape) - mask)) #TODO: remove double creation of tensor ?
+        mask_inv = torch.ones((mask.shape), device=mask.device) - mask
+        phi_loss = mse_loss(y_pred * mask_inv, phi_pred * mask_inv) 
         gt_loss = mse_loss(y_pred * mask, y * mask)
         loss = self.lambda1 * gt_loss + self.lambda2 * phi_loss
         return loss
@@ -170,7 +171,7 @@ class MiniRunner:
         pass
 
     def train(self, **trainer_kwargs):
-        trainer = pl.Trainer(gpus=self.gpu, max_epochs=self.hyperparamters.epochs, **trainer_kwargs)
+        trainer = pl.Trainer(gpus=self.gpu, max_epochs=self.hyperparameters.epochs, **trainer_kwargs)
         trainer.fit(self.model, train_dataloader=self.datamodule.train_dataloader())
         return self.model, trainer
 
@@ -183,11 +184,11 @@ class MiniRunner:
     def create_output(self, subject: tio.Subject, results_path: str='results/') -> None:
         #TODO: change results path
         file_tag = '' #TODO: change it later for nice output design
-        pred = self.model(subject.rn_t2.data.unsqueeze(0))
+        pred = self.model(subject[0])
         image_pred = pred.detach().numpy().squeeze()
         pred_nii_image = nb.Nifti1Image(image_pred, affine=np.eye(4))
         ground_truth_nii_image = nb.Nifti1Image(
-            subject.t2.data.detach().numpy().squeeze(), affine=np.eye(4)
+            subject[0].numpy().squeeze(), affine=np.eye(4)
         )
         nb.save(
         img=pred_nii_image,
@@ -202,9 +203,9 @@ class MiniRunner:
 
 phi_channels = [128, 128]
 phi_lr = 0.001
-epochs = 20
+epochs = 1
 lr = 0.001
-batch_size = 1
+batch_size = 16
 output_path = 'results/'
 mri_datamodule = MriDataModule()
 mri_datamodule.setup()
@@ -213,7 +214,7 @@ xp_hyperparameters=Hyperparameters(phi_channels=phi_channels, phi_lr=phi_lr, bat
 runner = MiniRunner(model=LitModel(), datamodule=mri_datamodule, hyperparameters=xp_hyperparameters)
 runner.setup()
 runner.train()
-runner.create_output(next(iter(mri_datamodule)))
+runner.create_output(next(iter(mri_datamodule.train_dataloader())))
 
 
 print("Done")

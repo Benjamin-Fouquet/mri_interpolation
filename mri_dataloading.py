@@ -72,8 +72,8 @@ class MriDataModule(pl.LightningDataModule):
     def __init__(
         self,
         mri_path='data/HCP/',
-        patch_size=(8, 8, 8),
-        patch_overlap=(0, 0, 0), 
+        patch_size=(256, 256, 32),
+        patch_overlap=(16, 16, 16), 
         percentage=50,
         *args,
         **kwargs
