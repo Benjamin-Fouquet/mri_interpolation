@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 import numpy as np
 import matplotlib.pyplot as plt
+import multiprocessing
 
 from torch.utils.data import Dataset
 
@@ -123,13 +124,13 @@ class MriDataModule(pl.LightningDataModule):
         self.test_ds = mri_dataset
 
     def train_dataloader(self):
-        return DataLoader(self.train_ds)
+        return DataLoader(self.train_ds, num_workers=multiprocessing.cpu_count())
 
     def val_dataloader(self):
-        return DataLoader(self.val_ds)
+        return DataLoader(self.val_ds, num_workers=multiprocessing.cpu_count())
 
     def test_dataloader(self):
-        return DataLoader(self.test_ds)
+        return DataLoader(self.test_ds, num_workers=multiprocessing.cpu_count())
 
     def get_dataset(self):
         return self.train_ds
