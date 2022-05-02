@@ -141,7 +141,7 @@ if __name__ == "__main__":
     architecture = args.architecture
 
 num_workers = multiprocessing.cpu_count()
-device = [2] if torch.cuda.is_available() else []
+device = [0] if torch.cuda.is_available() else []
 
 # parameters for queue
 queue_length = 300
