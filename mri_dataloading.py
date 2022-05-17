@@ -1,12 +1,10 @@
 import torchio as tio
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import pytorch_lightning as pl
 import numpy as np
 import matplotlib.pyplot as plt
 import multiprocessing
-
-from torch.utils.data import Dataset
 
 import matplotlib.pyplot as plt
 

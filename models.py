@@ -9,9 +9,148 @@ from dataclasses import dataclass
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
+import torchio as tio
 import torchvision
+from torch.utils.data import Dataset, DataLoader
 from skimage import metrics  # mean_squared_error, peak_signal_noise_ratio
+import matplotlib.pyplot as plt
+import os
 
+
+class ConvModule(pl.LightningModule):
+    '''
+    Base conv module for quick prototyping, including logging and QOL
+    TODO: logging
+    '''
+    def __init__(
+        self,
+        channels=[64, 64],
+        activation_function='ReLU',
+        input_sample=None, #a batch of dataloader, None assume classic torch tensor batch
+        learning_rate=0.001,
+        kernel_size=3,
+        activation_func='ReLU',
+        *args,
+        **kwargs, 
+    ):
+        super().__init__()
+        self.train_losses = []
+        self.val_losses = []
+        self.learning_rate = learning_rate
+        self.logging = False
+        self.input_sample = input_sample
+        #if torchio dataset, adapt network to accept torchio keys
+        if isinstance(self.input_sample, dict):
+            self.set_type = 'torchio'
+            keys = []
+            for key in input_sample:
+                keys.append(key)
+            self.x_key = keys[0]
+            self.y_key = keys[1]
+
+        #2D or 3D conv
+        if self.set_type == 'torchio':
+            batch_shape = input_sample[self.x_key]['data'].shape
+        else:
+            batch_shape = input_sample[0].shape
+        
+        if len(batch_shape) == 5:
+            conv_layer = nn.Conv3d
+        elif len(batch_shape) == 4:
+            conv_layer = nn.Conv2d
+
+        #activation function
+        if activation_func == "Tanh":
+            activation_layer=nn.Tanh()
+        if activation_func == "ReLU":
+            activation_layer=nn.ReLU()
+        if activation_func == "Sig":
+            activation_layer=nn.Sigmoid()
+        
+        #Build the layer system
+        layers = []
+        for idx in range(len(channels)):
+            in_channels = channels[idx - 1] if idx > 0 else 1
+            out_channels = channels[idx]
+            layer = conv_layer(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=1,
+            )
+
+            layers.append(layer)
+            layers.append(activation_layer)
+
+        last_layer = conv_layer(
+            in_channels=channels[-1],
+            out_channels=1,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=1,
+        )
+        layers.append(last_layer)
+        self.model = nn.Sequential(*layers)
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(x)
+
+    def loss(self, y_pred:torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        return nn.functional.mse_loss(y_pred, y)
+
+    def configure_optimizers(self) -> torch.optim.Adam:
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        return optimizer
+
+    def log_parameters(self) -> None:
+        '''
+        if self.xp_parameters != None:
+            txt_log = ""
+            for key, value in enumerate(self.xp_parameters):
+                txt_log += f"{key}: {value}"
+                txt_log += "\n"
+            self.logger.experiment.add_text("Data", txt_log)
+            '''
+        return None
+
+    def training_step(self, batch, batch_idx) -> float:
+        if self.set_type == 'torchio':
+            x, y = batch[self.x_key]["data"], batch[self.y_key]["data"]
+        else:
+            x, y = batch
+        y_pred = self.forward(x)
+        loss = self.loss(y_pred, y)
+        self.train_losses.append(loss.detach().cpu().numpy())
+        if self.logging:
+            self.log("train loss: ", loss)
+        return loss
+
+    def validation_step(self, batch, batch_idx) -> float:
+        if self.set_type == 'torchio':
+            x, y = batch[self.x_key]["data"], batch[self.y_key]["data"]
+        else:
+            x, y = batch
+        y_pred = self.forward(x)
+        loss = self.loss(y_pred, y)
+        self.val_losses.append(loss.detach().cpu().numpy())
+        if self.logging:
+            self.log("val loss: ", loss)
+        return loss
+
+    def test_step(self, test_batch, batch_idx):
+        pass
+
+    def on_fit_end(self) -> None:
+        os.mkdir('results' + str(self.logger.version) + '/')
+        #log losses as image TODO: add labels on legend
+        fig1 = plt.plot(range(len(self.train_losses)), self.train_losses, color='r', label='train')
+        fig1 = plt.plot(range(len(self.val_losses)), self.val_losses, color='g', label='validation') #TODO: repeat val_losses on len of train_loss ?
+        plt.savefig('results' +
+            str(self.logger.version) + '/'
+            + "losses.png"
+        )
+        return None
 
 ###############
 # Autoencoder #
@@ -330,6 +469,18 @@ class Unet(pl.LightningModule):
 
 #debugging
 if __name__ == "__main__":
+    #create lightweight dataloader, normat torch and torchIO
+    class LitDataset(Dataset):
+        def __init__ (self, dim=(128, 128, 128), *args, **kwargs):
+            self.x = torch.randn(dim)
+            self.y = torch.randn(dim)
+        def __len__(self):
+            return 1
+        def __getitem__(self, idx):
+            return self.x, self.y
+
+    dataloader = DataLoader(dataset=LitDataset(), batch_size=1, shuffle=False)
+
     cnn = ThreeDCNN()
     unet = Unet()
     
