@@ -10,11 +10,14 @@ TODO:
 DONE:
 -define train, val, test datasets
 -patch structure
+-optimisation artefacts creation
+-some logs
 '''
 
 import glob
 import multiprocessing
 import sys
+from typing import Tuple, Union, Dict
 
 import matplotlib.pyplot as plt
 import nibabel as nib
@@ -26,9 +29,9 @@ from torch.utils.data import DataLoader, Dataset
 
 from models import ThreeDCNN, ConvModule
 
-batch_size = 32
+gpu = [0] if torch.cuda.is_available() else []
 
-def show_slices(image):
+def show_slices(image: Union[np.ndarray, tio.data.image.ScalarImage, nib.nifti1.Nifti1Image]) -> None:
     """
     TODO: add torchio and numpy compatibility objects compatiblity
     """
@@ -52,29 +55,15 @@ def show_slices(image):
         axes[i].imshow(slice.T, cmap="gray", origin="lower")
     plt.show()
 
-###Lightweight Dataclass
-class MriDataset(Dataset):
-    '''This class is not needed for dhcp'''
-    def __init__(self, subject_ds, *args, **kwargs):
-        self.subject_ds = subject_ds
-
-    def __len__(self):
-        return len(self.subject_ds)
-
-    def __getitem__(self, idx):
-        subject_item = self.subject_ds[idx]
-        obs_item = subject_item.t2_degrad.data.squeeze(-1)
-        gt_item = subject_item.t2.data.squeeze(-1)
-        return obs_item, gt_item
-
 class MriDataModule(pl.LightningDataModule):
     def __init__(
         self,
         dhcp_path: str = "data/DHCP_seg/",
         baboon_path: str ='data/baboon_seg/',
-        max_subjects: int = 10,
-        patch_size = (64, 64, 1),
-        patch_overlap = None, #TODO: automated overlap 10% ?
+        max_subjects: int = 100,
+        batch_size: int = 32,
+        patch_size: Union[int, Tuple[int, ...]] = (64, 64, 1),
+        patch_overlap: Union[int, Tuple[int, ...]] = None, #no effect atm
         *args,
         **kwargs
     ):
@@ -83,6 +72,7 @@ class MriDataModule(pl.LightningDataModule):
         self.val_ds = None
         self.test_ds = None
         self.dhcp_path = dhcp_path
+        self.batch_size = batch_size
         self.baboon_path = baboon_path
         self.max_subjects = max_subjects
         #train/val ~10% hardcoded // potential bug if max subj > number of available data
@@ -98,7 +88,7 @@ class MriDataModule(pl.LightningDataModule):
         for t2_path in all_t2s:
             #normalize
             t2 = tio.RescaleIntensity(out_min_max=(0, 1))(tio.ScalarImage(t2_path))
-            t2_degrad = tio.transforms.RandomMotion(degrees=10, translation=10, num_transforms=2, image_interpolation='linear')(t2)
+            t2_degrad = tio.transforms.RandomMotion(degrees=20, translation=20, num_transforms=4, image_interpolation='linear')(t2)
             subjects.append(tio.Subject(t2=t2, t2_degrad=t2_degrad))
 
         # for subject in subjects:
@@ -141,6 +131,7 @@ class MriDataModule(pl.LightningDataModule):
         #split
         subjects_dataset = tio.SubjectsDataset(subjects)
         baboons_dataset = tio.SubjectsDataset(baboons)
+        self.subjects_dataset = subjects_dataset
 
         if self.patch_size == None:
             self.train_ds, self.val_ds = torch.utils.data.random_split(dataset=subjects_dataset, lengths=[self.train_length, self.val_length])
@@ -159,17 +150,17 @@ class MriDataModule(pl.LightningDataModule):
             self.train_ds, self.val_ds = torch.utils.data.random_split(dataset=patches_queue, lengths=[self.train_length * samples_per_volume, self.val_length * samples_per_volume])
             self.test_ds = baboons_dataset #TODO: patches on baboon ?
 
-    def train_dataloader(self):
-        return DataLoader(self.train_ds, num_workers=multiprocessing.cpu_count() if not self.patch_size else 0)
+    def train_dataloader(self) -> DataLoader:
+        return DataLoader(self.train_ds, batch_size=self.batch_size, num_workers=multiprocessing.cpu_count() if not self.patch_size else 0)
 
-    def val_dataloader(self):
-        return DataLoader(self.val_ds, num_workers=multiprocessing.cpu_count() if not self.patch_size else 0)
+    def val_dataloader(self)-> DataLoader:
+        return DataLoader(self.val_ds, batch_size=self.batch_size, num_workers=multiprocessing.cpu_count() if not self.patch_size else 0)
 
-    def test_dataloader(self):
+    def test_dataloader(self)-> DataLoader:
         return DataLoader(self.test_ds, num_workers=multiprocessing.cpu_count() if not self.patch_size else 0)
 
-    def get_dataset(self):
-        return self.train_ds
+    def get_dataset(self)-> tio.SubjectsDataset:
+        return self.subjects_dataset
 
 DHCP_path = "data/DHCP_seg/"
 baboon_path = "data/baboon_seg"
@@ -181,9 +172,9 @@ mri_dataloader.setup()
 
 batch = next(iter(mri_dataloader.train_dataloader()))
 
-model = ConvModule(input_sample=batch)
+model = ConvModule(input_sample=batch, channels=(128, 128, 128))
 
-trainer = pl.Trainer(gpus=[], max_epochs=1)
+trainer = pl.Trainer(gpus=gpu, max_epochs=10)
 
 trainer.fit(model, train_dataloaders=mri_dataloader.train_dataloader(), val_dataloaders=mri_dataloader.val_dataloader())
 
@@ -194,6 +185,27 @@ baboon_image = nib.load(
 baboon_image = torch.FloatTensor(baboon_image.get_fdata()).squeeze(-1)
 pred = model(baboon_image[:, :, 13].unsqueeze(0).unsqueeze(0).unsqueeze(-1)) #TODO: correct the ugly code
 image_pred = pred.detach().numpy().squeeze()
-pred_nii_image = nib.Nifti1Image(image_pred, affine=np.eye(4))
+# pred_nii_image = nib.Nifti1Image(image_pred, affine=np.eye(4))
+fig = plt.imshow(image_pred)
+plt.savefig('pred.png')
+plt.clf()
+batch = next(iter(mri_dataloader.get_dataset()))
+x = batch['t2_degrad']['data']
+y = batch['t2']['data']
+pred = model.forward(x.unsqueeze(0))
+x = x[:,:,:,100].detach().numpy().squeeze(0)
+y = y[:,:,:,100].detach().numpy().squeeze(0)
+pred = pred[:,:,:,:,100].detach().numpy().squeeze(0).squeeze(0)
+image_list = [x, y, pred]
+fig, axes = plt.subplots(1, len(image_list))
+for i, img in enumerate(image_list):
+    axes[i].imshow(img, cmap="gray", origin="lower")
 
-nib.save(img=pred_nii_image, filename="predicition.nii.gz")
+plt.savefig('results' + '/' + str(model.logger.version) + '/' + 'x_y_pred.png')
+
+# nib.save(img=pred_nii_image, filename="predicition.nii.gz")
+
+'''
+fig = plt.imshow(image_pred, cmap='gray')
+plt.savefig('pred.png')
+'''

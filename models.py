@@ -2,10 +2,13 @@
 Models
 TODO:
 -Validation step in models
+DONE:
+-Loggs
+-losses
 """
 
 from dataclasses import dataclass
-
+from typing import Tuple, Union, Dict, Any
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -24,12 +27,11 @@ class ConvModule(pl.LightningModule):
     '''
     def __init__(
         self,
-        channels=[64, 64],
-        activation_function='ReLU',
-        input_sample=None, #a batch of dataloader, None assume classic torch tensor batch
-        learning_rate=0.001,
-        kernel_size=3,
-        activation_func='ReLU',
+        channels: Tuple[int, ...] = [128, 128, 128],
+        input_sample: Any = None, #a batch of dataloader, None assume classic torch tensor batch, necessary for full logging
+        learning_rate: float = 0.001,
+        kernel_size: Union[int, Tuple[int, ...]] =3,
+        activation_func: str = 'ReLU',
         *args,
         **kwargs, 
     ):
@@ -104,14 +106,49 @@ class ConvModule(pl.LightningModule):
         return optimizer
 
     def log_parameters(self) -> None:
-        '''
         if self.xp_parameters != None:
             txt_log = ""
             for key, value in enumerate(self.xp_parameters):
                 txt_log += f"{key}: {value}"
                 txt_log += "\n"
             self.logger.experiment.add_text("Data", txt_log)
-            '''
+
+        # log of image, gt and difference before converting to np
+
+        if self.set_type == 'torchio':
+            x, y = (
+                self.input_sample[self.x_key]['data'],
+                self.input_sample[self.x_key]['data'],
+            )
+        else:
+            x, y = (
+                self.input_sample[0]['data'],
+                self.input_sample[1]['data'],
+            )
+        if self.logging and self.input_sample != None:
+
+            y_pred = self.forward(x)
+            diff = y - y_pred
+            ground_truth_grid = torchvision.utils.make_grid(
+                y[..., int(y.shape[-1] / 2)]
+            )  # slicing around middle
+            self.logger.experiment.add_image("ground-truth", ground_truth_grid, 0)
+            pred_grid = torchvision.utils.make_grid(
+                y_pred[..., int(y.shape[-1] / 2)]
+            )  # slicing around middle
+            self.logger.experiment.add_image("prediction", pred_grid, 0)
+            diff_grid = torchvision.utils.make_grid(
+                diff[..., int(y.shape[-1] / 2)]
+            )  # slicing around middle
+            self.logger.experiment.add_image("differences", diff_grid, 0)
+
+            # detach and log metrics
+            y = y.detach().numpy().squeeze()
+            y_pred = y_pred.detach().numpy().squeeze()
+            self.log("MSE", metrics.mean_squared_error(y, y_pred))
+            self.log("PSNR", metrics.peak_signal_noise_ratio(y, y_pred))
+            self.log("SSMI", metrics.structural_similarity(y, y_pred))
+        
         return None
 
     def training_step(self, batch, batch_idx) -> float:
@@ -142,14 +179,13 @@ class ConvModule(pl.LightningModule):
         pass
 
     def on_fit_end(self) -> None:
-        os.mkdir('results' + str(self.logger.version) + '/')
+        os.mkdir('results' + '/' + str(self.logger.version) + '/')
         #log losses as image TODO: add labels on legend
         fig1 = plt.plot(range(len(self.train_losses)), self.train_losses, color='r', label='train')
-        fig1 = plt.plot(range(len(self.val_losses)), self.val_losses, color='g', label='validation') #TODO: repeat val_losses on len of train_loss ?
-        plt.savefig('results' +
-            str(self.logger.version) + '/'
-            + "losses.png"
-        )
+        fig2 = plt.plot(range(len(self.val_losses)), self.val_losses, color='g', label='validation') #TODO: repeat val_losses on len of train_loss ?
+        plt.savefig('results' + '/' + str(self.logger.version) + '/' + "losses.png")
+        if self.logging:
+            self.log_parameters()
         return None
 
 ###############
