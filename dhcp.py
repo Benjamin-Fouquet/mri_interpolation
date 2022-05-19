@@ -1,6 +1,6 @@
 '''
 TODO:
--2D patchs with adaptation and 2D convs
+
 -try SeparableConv2D as drop in replacement for 2D conv
 -checkpoints for easy save/load of model
 -automated 10% patch overlap
@@ -8,16 +8,19 @@ TODO:
 -make degradation flexible ?
 -log for tensorboard at train and val
 DONE:
+-2D implementation (and 3D)
 -define train, val, test datasets
 -patch structure
 -optimisation artefacts creation
 -some logs
+-2D patchs with adaptation and 2D convs !! not possible with torchio
 '''
 
 import glob
 import multiprocessing
 import sys
 from typing import Tuple, Union, Dict
+from matplotlib import transforms
 
 import matplotlib.pyplot as plt
 import nibabel as nib
@@ -33,7 +36,7 @@ gpu = [0] if torch.cuda.is_available() else []
 
 def show_slices(image: Union[np.ndarray, tio.data.image.ScalarImage, nib.nifti1.Nifti1Image]) -> None:
     """
-    TODO: add torchio and numpy compatibility objects compatiblity
+    TODO:
     """
     if isinstance(image, nib.nifti1.Nifti1Image):
         data = image.get_fdata()
@@ -56,13 +59,23 @@ def show_slices(image: Union[np.ndarray, tio.data.image.ScalarImage, nib.nifti1.
     plt.show()
 
 class MriDataModule(pl.LightningDataModule):
+    '''
+    MRI DataModule taking nifti images, applying torchio transforms to it and returning a batch of associated data. Used for training on DHCP and testing on baboon. 3D
+    ARGS:
+    -dhcp_path: path to training data folder
+    -baboon_path: path to test data folder
+    -max_subjects: max number of subjects for training data
+    -batch_size: batch_size
+    -patch_size: size of patch, None yield complete image
+    -patch overlap: overlap between patches: for the moment hard coded 10%
+    '''
     def __init__(
         self,
         dhcp_path: str = "data/DHCP_seg/",
         baboon_path: str ='data/baboon_seg/',
         max_subjects: int = 100,
         batch_size: int = 32,
-        patch_size: Union[int, Tuple[int, ...]] = (64, 64, 1),
+        patch_size: Union[int, Tuple[int, ...]] = (97, 97, 1),
         patch_overlap: Union[int, Tuple[int, ...]] = None, #no effect atm
         *args,
         **kwargs
@@ -84,42 +97,32 @@ class MriDataModule(pl.LightningDataModule):
     def setup(self):
         all_t2s = glob.glob(self.dhcp_path + '*_t2_seg.nii.gz', recursive=True)[:self.max_subjects]
         subjects = []
+        down_factor = 3.0
         # DHCP data for train and val
         for t2_path in all_t2s:
             #normalize
             t2 = tio.RescaleIntensity(out_min_max=(0, 1))(tio.ScalarImage(t2_path))
-            t2_degrad = tio.transforms.RandomMotion(degrees=20, translation=20, num_transforms=4, image_interpolation='linear')(t2)
-            subjects.append(tio.Subject(t2=t2, t2_degrad=t2_degrad))
-
-        # for subject in subjects:
-            # #Resolution degradation
-            # down_factor = 3.0
-            # transforms = [
-            #     tio.Resample(
-            #         (
-            #             subject.t2.spacing[0] * down_factor,
-            #             subject.t2.spacing[1] * down_factor,
-            #             subject.t2.spacing[2] * down_factor,
-            #         ),
-            #         image_interpolation="linear",
-            #     ),
-            #     tio.Resample(
-            #         (
-            #             subject.t2.spacing[0],
-            #             subject.t2.spacing[1],
-            #             subject.t2.spacing[2],
-            #         ),
-            #         image_interpolation="nearest",
-            #     ),
-            # ]
-
-            # Gibbs like effects
-            # transforms = [
-            #     tio.transforms.RandomAnisotropy(downsampling=(1.5, 5)),
-            #     tio.transforms.RandomMotion(degrees=10, translation=10, num_transforms=2, image_interpolation='linear'),
-            #     tio.transforms.RandomGhosting(num_ghosts=(4, 10), intensity=(0.5, 1), restore=0.02)
-            
-            # ]
+            transforms = [
+                tio.transforms.RandomMotion(degrees=20, translation=20, num_transforms=4, image_interpolation='linear'),
+                tio.Resample(
+                    (
+                        t2.spacing[0] * down_factor,
+                        t2.spacing[1] * down_factor,
+                        t2.spacing[2] * down_factor,
+                    ),
+                    image_interpolation="gaussian",
+            ),
+            ]
+            t2_lowres = tio.Resample(
+                    (
+                        t2.spacing[0] * down_factor,
+                        t2.spacing[1] * down_factor,
+                        t2.spacing[2] * down_factor,
+                    ),
+                    image_interpolation="gaussian",
+            )(t2)
+            t2_degrad = tio.transforms.Compose(transforms)(t2)
+            subjects.append(tio.Subject(t2=t2_lowres, t2_degrad=t2_degrad))
 
         #test data (use with care)
         all_baboons = glob.glob(self.baboon_path + '*.nii.gz', recursive=True)[:self.max_subjects]
@@ -159,8 +162,13 @@ class MriDataModule(pl.LightningDataModule):
     def test_dataloader(self)-> DataLoader:
         return DataLoader(self.test_ds, num_workers=multiprocessing.cpu_count() if not self.patch_size else 0)
 
-    def get_dataset(self)-> tio.SubjectsDataset:
-        return self.subjects_dataset
+    def get_dataset(self, datatype: str = 'train')-> tio.SubjectsDataset:
+        if datatype == 'train':
+            return self.subjects_dataset
+        if datatype == 'val':
+            return self.subjects_dataset
+        if datatype == 'test':
+            return self.test_ds
 
 DHCP_path = "data/DHCP_seg/"
 baboon_path = "data/baboon_seg"
@@ -183,25 +191,40 @@ baboon_image = nib.load(
     "data/baboon_seg/sub-Formule_ses-03_T2_HASTE_AX2_12_crop_seg.nii.gz"
 )
 baboon_image = torch.FloatTensor(baboon_image.get_fdata()).squeeze(-1)
-pred = model(baboon_image[:, :, 13].unsqueeze(0).unsqueeze(0).unsqueeze(-1)) #TODO: correct the ugly code
+# pred = model(baboon_image[:, :, 13].unsqueeze(0).unsqueeze(0).unsqueeze(-1))
+pred = model(baboon_image[:, :, 13].unsqueeze(0).unsqueeze(0).squeeze(-1)) #TODO: correct the ugly code
 image_pred = pred.detach().numpy().squeeze()
 # pred_nii_image = nib.Nifti1Image(image_pred, affine=np.eye(4))
-fig = plt.imshow(image_pred)
-plt.savefig('pred.png')
+image_list = [baboon_image[:, :, 13], image_pred]
+fig, axes = plt.subplots(1, len(image_list))
+for i, img in enumerate(image_list):
+    axes[i].imshow(img, cmap="gray", origin="lower")
+    
+plt.savefig('results' + '/' + str(model.logger.version) + '/' + 'baboon_pred.png')
 plt.clf()
+
+#output for classic prediction
 batch = next(iter(mri_dataloader.get_dataset()))
 x = batch['t2_degrad']['data']
 y = batch['t2']['data']
-pred = model.forward(x.unsqueeze(0))
-x = x[:,:,:,100].detach().numpy().squeeze(0)
-y = y[:,:,:,100].detach().numpy().squeeze(0)
-pred = pred[:,:,:,:,100].detach().numpy().squeeze(0).squeeze(0)
+pred = model.forward(x[:,:,34].unsqueeze(0))
+#3D case
+# x = x[:,:,:,int(x.shape[3] / 2)].detach().numpy().squeeze(0)
+# y = y[:,:,:,int(y.shape[3] / 2)].detach().numpy().squeeze(0)
+# pred = pred[:,:,:,:,int(pred.shape[4] / 2)].detach().numpy().squeeze(0).squeeze(0)
+#2D case
+x = x[:,:,34].detach().numpy().squeeze(0)
+y = y[:,:,34].detach().numpy().squeeze(0)
+pred = pred.detach().numpy().squeeze(0).squeeze(0)
+
 image_list = [x, y, pred]
 fig, axes = plt.subplots(1, len(image_list))
 for i, img in enumerate(image_list):
     axes[i].imshow(img, cmap="gray", origin="lower")
 
 plt.savefig('results' + '/' + str(model.logger.version) + '/' + 'x_y_pred.png')
+plt.clf()
+
 
 # nib.save(img=pred_nii_image, filename="predicition.nii.gz")
 

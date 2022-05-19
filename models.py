@@ -57,7 +57,10 @@ class ConvModule(pl.LightningModule):
             batch_shape = input_sample[0].shape
         
         if len(batch_shape) == 5:
-            conv_layer = nn.Conv3d
+            if batch_shape[-1] == 1:
+                conv_layer = nn.Conv2d
+            else:
+                conv_layer = nn.Conv3d
         elif len(batch_shape) == 4:
             conv_layer = nn.Conv2d
 
@@ -156,6 +159,10 @@ class ConvModule(pl.LightningModule):
             x, y = batch[self.x_key]["data"], batch[self.y_key]["data"]
         else:
             x, y = batch
+        #if slice dimension of batch == 1, squeeze
+        if x.shape[-1] == 1:
+            x = x.squeeze(-1)
+            y = y.squeeze(-1)
         y_pred = self.forward(x)
         loss = self.loss(y_pred, y)
         self.train_losses.append(loss.detach().cpu().numpy())
@@ -168,6 +175,10 @@ class ConvModule(pl.LightningModule):
             x, y = batch[self.x_key]["data"], batch[self.y_key]["data"]
         else:
             x, y = batch
+        #if slice dimension of batch == 1, squeeze
+        if x.shape[-1] == 1:
+            x = x.squeeze(-1)
+            y = y.squeeze(-1)
         y_pred = self.forward(x)
         loss = self.loss(y_pred, y)
         self.val_losses.append(loss.detach().cpu().numpy())
@@ -502,6 +513,49 @@ class Unet(pl.LightningModule):
             # Add parameters
             self.log_parameters()
         return None
+
+class SeparableConv2d(torch.nn.Module):
+    '''
+    source: https://gist.github.com/bdsaglam/84b1e1ba848381848ac0a308bfe0d84c
+    '''
+    def __init__(self, 
+                 in_channels,
+                 out_channels,
+                 kernel_size=3,
+                 stride=1,
+                 padding=0,
+                 dilation=1,
+                 bias=True,
+                 padding_mode='zeros',
+                 depth_multiplier=1,
+        ):
+        super().__init__()
+        
+        intermediate_channels = in_channels * depth_multiplier
+        self.spatialConv = torch.nn.Conv2d(
+             in_channels=in_channels,
+             out_channels=intermediate_channels,
+             kernel_size=kernel_size,
+             stride=stride,
+             padding=padding,
+             dilation=dilation,
+             groups=in_channels,
+             bias=bias,
+             padding_mode=padding_mode
+        )
+        self.pointConv = torch.nn.Conv2d(
+             in_channels=intermediate_channels,
+             out_channels=out_channels,
+             kernel_size=1,
+             stride=1,
+             padding=0,
+             dilation=1,
+             bias=bias,
+             padding_mode=padding_mode,
+        )
+    
+    def forward(self, x):
+        return self.pointConv(self.spatialConv(x))
 
 #debugging
 if __name__ == "__main__":
