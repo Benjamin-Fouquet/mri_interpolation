@@ -21,6 +21,7 @@ import multiprocessing
 import sys
 from typing import Tuple, Union, Dict
 from matplotlib import transforms
+from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
 import nibabel as nib
@@ -30,33 +31,28 @@ import torch
 import torchio as tio
 from torch.utils.data import DataLoader, Dataset
 
-from models import ThreeDCNN, ConvModule
+from models import AutoEncoder, ThreeDCNN, ConvModule, UnetAdded, UnetConcatenated
+
+from utils import * #utils for debugging, to be removed at deployement
 
 gpu = [0] if torch.cuda.is_available() else []
 
-def show_slices(image: Union[np.ndarray, tio.data.image.ScalarImage, nib.nifti1.Nifti1Image]) -> None:
-    """
-    TODO:
-    """
-    if isinstance(image, nib.nifti1.Nifti1Image):
-        data = image.get_fdata()
-        data = data.reshape(image.shape[0:3])
-    elif isinstance(image, np.ndarray):
-        data = image
-    elif isinstance(image, tio.data.image.ScalarImage):
-        data = image.data.squeeze(0)
-    else:
-        print("format not recognized")  # TODO: raise exception
-    xmean, ymean, zmean = [int(i / 2) for i in data.shape]
-    """ Function to display row of image slices """
-    slice_0 = data[xmean, :, :]
-    slice_1 = data[:, ymean, :]
-    slice_2 = data[:, :, zmean]
-    slices = [slice_0, slice_1, slice_2]
-    fig, axes = plt.subplots(1, len(slices))
-    for i, slice in enumerate(slices):
-        axes[i].imshow(slice.T, cmap="gray", origin="lower")
-    plt.show()
+#placeholder dataclass for hydra config // can you set it up on the flight via command line easily ? or call alternative configuration on the fly
+@dataclass
+class Config:
+    model_class: pl.LightningModule = ConvModule,
+    batch_size: int = 32
+    max_subjects: int = 10
+    dhcp_path: str = "data/DHCP_seg/"
+    baboon_path: str ='data/baboon_seg/'
+    batch_size: int = 32
+    patch_size: Union[int, Tuple[int, ...]] = (64, 64, 1)
+    patch_overlap: Union[int, Tuple[int, ...]] = None
+    max_epochs: int = 5
+    num_channels: Tuple[int, ...] = [8, 32, 64, 128,]
+
+
+config = Config()
 
 class MriDataModule(pl.LightningDataModule):
     '''
@@ -73,9 +69,9 @@ class MriDataModule(pl.LightningDataModule):
         self,
         dhcp_path: str = "data/DHCP_seg/",
         baboon_path: str ='data/baboon_seg/',
-        max_subjects: int = 100,
+        max_subjects: int = 10, #max is 490
         batch_size: int = 32,
-        patch_size: Union[int, Tuple[int, ...]] = (97, 97, 1),
+        patch_size: Union[int, Tuple[int, ...]] = (64, 64, 1),
         patch_overlap: Union[int, Tuple[int, ...]] = None, #no effect atm
         *args,
         **kwargs
@@ -112,6 +108,14 @@ class MriDataModule(pl.LightningDataModule):
                     ),
                     image_interpolation="gaussian",
             ),
+            #     tio.Resample( #forces resize to patch size
+            #         (
+            #             self.patch_size[0],
+            #             self.patch_size[0],
+            #             t2.spacing[2] * down_factor,
+            #         ),
+            #         image_interpolation="gaussian",
+            # ),
             ]
             t2_lowres = tio.Resample(
                     (
@@ -136,7 +140,7 @@ class MriDataModule(pl.LightningDataModule):
         baboons_dataset = tio.SubjectsDataset(baboons)
         self.subjects_dataset = subjects_dataset
 
-        if self.patch_size == None:
+        if self.patch_size is None:
             self.train_ds, self.val_ds = torch.utils.data.random_split(dataset=subjects_dataset, lengths=[self.train_length, self.val_length])
             self.test_ds = baboons_dataset
         else:
@@ -170,29 +174,34 @@ class MriDataModule(pl.LightningDataModule):
         if datatype == 'test':
             return self.test_ds
 
-DHCP_path = "data/DHCP_seg/"
-baboon_path = "data/baboon_seg"
 # a dataset
 mri_dataloader = MriDataModule(
-    mri_path=DHCP_path,
+    mri_path=config.dhcp_path,
+    baboon_path=config.baboon_path,
+    batch_size=config.batch_size,
+    max_subjects=config.max_subjects,
 )
 mri_dataloader.setup()
 
 batch = next(iter(mri_dataloader.train_dataloader()))
 
-model = ConvModule(input_sample=batch, channels=(128, 128, 128))
+# model = AutoEncoder(input_sample=batch, num_channels=[4, 8, 16, 32, 32, 16, 8, 4])
+model = UnetConcatenated(input_sample=batch, num_channels=config.num_channels)
 
-trainer = pl.Trainer(gpus=gpu, max_epochs=10)
+trainer = pl.Trainer(gpus=gpu, max_epochs=config.max_epochs)
 
 trainer.fit(model, train_dataloaders=mri_dataloader.train_dataloader(), val_dataloaders=mri_dataloader.val_dataloader())
 
 # output 1 prediction, try to get it in test loader at a point
+
 baboon_image = nib.load(
     "data/baboon_seg/sub-Formule_ses-03_T2_HASTE_AX2_12_crop_seg.nii.gz"
 )
 baboon_image = torch.FloatTensor(baboon_image.get_fdata()).squeeze(-1)
+if isinstance(model, Unet):
+    baboon_image = torch.FloatTensor(np.vstack([baboon_image[:,:96,:], np.zeros((2, 96, 27))]))
 # pred = model(baboon_image[:, :, 13].unsqueeze(0).unsqueeze(0).unsqueeze(-1))
-pred = model(baboon_image[:, :, 13].unsqueeze(0).unsqueeze(0).squeeze(-1)) #TODO: correct the ugly code
+pred = model.forward(baboon_image[:, :, 13].unsqueeze(0).unsqueeze(0).squeeze(-1)) #TODO: correct the ugly code
 image_pred = pred.detach().numpy().squeeze()
 # pred_nii_image = nib.Nifti1Image(image_pred, affine=np.eye(4))
 image_list = [baboon_image[:, :, 13], image_pred]
@@ -207,7 +216,10 @@ plt.clf()
 batch = next(iter(mri_dataloader.get_dataset()))
 x = batch['t2_degrad']['data']
 y = batch['t2']['data']
-pred = model.forward(x[:,:,34].unsqueeze(0))
+if isinstance(model, UnetAdded) or isinstance(model, UnetConcatenated):
+    x = x[:, :96, :96, :]
+    y = y[:, :96, :96, :]
+pred = model.forward(x[:,:,:,34].unsqueeze(0))
 #3D case
 # x = x[:,:,:,int(x.shape[3] / 2)].detach().numpy().squeeze(0)
 # y = y[:,:,:,int(y.shape[3] / 2)].detach().numpy().squeeze(0)
