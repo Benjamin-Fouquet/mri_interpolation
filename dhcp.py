@@ -98,8 +98,33 @@ class MriDataModule(pl.LightningDataModule):
         for t2_path in all_t2s:
             #normalize
             t2 = tio.RescaleIntensity(out_min_max=(0, 1))(tio.ScalarImage(t2_path))
-            t2_degrad = tio.transforms.RandomMotion(degrees=10, translation=10, num_transforms=2, image_interpolation='linear')(t2)
+            t2_degrad = tio.transforms.RandomMotion(degrees=20, translation=0, num_transforms=3, image_interpolation='linear')(t2)
             subjects.append(tio.Subject(t2=t2, t2_degrad=t2_degrad))
+
+down_factor = 3.0
+transforms = [
+# tio.Resample(
+#     (
+#         t2.spacing[0] * down_factor,
+#         t2.spacing[1] * down_factor,
+#         t2.spacing[2] * down_factor,
+#     ),
+#     image_interpolation="linear",
+# ),
+
+tio.transforms.RandomMotion(degrees=8, translation=15, num_transforms=8, image_interpolation='linear'),
+tio.Resample(
+    (
+        t2.spacing[0] * down_factor,
+        t2.spacing[1] * down_factor,
+        t2.spacing[2] * down_factor,
+    ),
+    image_interpolation="gaussian",
+),
+]
+
+
+t2_degrad = tio.transforms.Compose(transforms=transforms)(t2)
 
         # for subject in subjects:
             # #Resolution degradation
@@ -128,6 +153,7 @@ class MriDataModule(pl.LightningDataModule):
             #     tio.transforms.RandomAnisotropy(downsampling=(1.5, 5)),
             #     tio.transforms.RandomMotion(degrees=10, translation=10, num_transforms=2, image_interpolation='linear'),
             #     tio.transforms.RandomGhosting(num_ghosts=(4, 10), intensity=(0.5, 1), restore=0.02)
+            
             
             # ]
 
