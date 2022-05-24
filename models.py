@@ -2,10 +2,13 @@
 Models
 TODO:
 -Validation step in models
+DONE:
+-Loggs
+-losses
 """
 
 from dataclasses import dataclass
-
+from typing import Tuple, Union, Dict, Any, List
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -16,6 +19,24 @@ from skimage import metrics  # mean_squared_error, peak_signal_noise_ratio
 import matplotlib.pyplot as plt
 import os
 
+def string_to_activation_layer(activation_func: str, *args, **kwargs) -> torch.nn:
+    '''
+    Simple function for reutrning a nn module from a string
+    Args:
+        activation_func (str): String describing an activation function
+    Returns:
+        activation_layer (torch.nn): Corresponding activation layer
+    TODO: leaky ReLU
+
+    '''
+    if activation_func == "Tanh":
+        activation_layer=nn.Tanh()
+    if activation_func == "ReLU":
+        activation_layer=nn.ReLU()
+    if activation_func == "Sig":
+        activation_layer=nn.Sigmoid()
+    return activation_layer
+
 
 class ConvModule(pl.LightningModule):
     '''
@@ -24,12 +45,11 @@ class ConvModule(pl.LightningModule):
     '''
     def __init__(
         self,
-        channels=[64, 64],
-        activation_function='ReLU',
-        input_sample=None, #a batch of dataloader, None assume classic torch tensor batch
-        learning_rate=0.001,
-        kernel_size=3,
-        activation_func='ReLU',
+        channels: Tuple[int, ...] = [128, 128, 128],
+        input_sample: Any = None, #a batch of dataloader, None assume classic torch tensor batch, necessary for full logging
+        learning_rate: float = 0.001,
+        kernel_size: Union[int, Tuple[int, ...]] = 3,
+        activation_func: str = 'ReLU',
         *args,
         **kwargs, 
     ):
@@ -39,9 +59,10 @@ class ConvModule(pl.LightningModule):
         self.learning_rate = learning_rate
         self.logging = False
         self.input_sample = input_sample
+        self.dataset_type = 'default'
         #if torchio dataset, adapt network to accept torchio keys
         if isinstance(self.input_sample, dict):
-            self.set_type = 'torchio'
+            self.dataset_type = 'torchio'
             keys = []
             for key in input_sample:
                 keys.append(key)
@@ -49,23 +70,21 @@ class ConvModule(pl.LightningModule):
             self.y_key = keys[1]
 
         #2D or 3D conv
-        if self.set_type == 'torchio':
-            batch_shape = input_sample[self.x_key]['data'].shape
+        if self.dataset_type == 'torchio':
+            batch_shape = self.input_sample[self.x_key]['data'].shape
         else:
-            batch_shape = input_sample[0].shape
+            batch_shape = self.input_sample[0].shape if self.input_sample else [0, 0, 0, 0] #default fake batch for 2D
         
         if len(batch_shape) == 5:
-            conv_layer = nn.Conv3d
+            if batch_shape[-1] == 1:
+                conv_layer = nn.Conv2d
+            else:
+                conv_layer = nn.Conv3d
         elif len(batch_shape) == 4:
             conv_layer = nn.Conv2d
 
         #activation function
-        if activation_func == "Tanh":
-            activation_layer=nn.Tanh()
-        if activation_func == "ReLU":
-            activation_layer=nn.ReLU()
-        if activation_func == "Sig":
-            activation_layer=nn.Sigmoid()
+        activation_layer = string_to_activation_layer(activation_func)
         
         #Build the layer system
         layers = []
@@ -104,21 +123,60 @@ class ConvModule(pl.LightningModule):
         return optimizer
 
     def log_parameters(self) -> None:
-        '''
         if self.xp_parameters != None:
             txt_log = ""
             for key, value in enumerate(self.xp_parameters):
                 txt_log += f"{key}: {value}"
                 txt_log += "\n"
             self.logger.experiment.add_text("Data", txt_log)
-            '''
+
+        # log of image, gt and difference before converting to np
+
+        if self.dataset_type == 'torchio':
+            x, y = (
+                self.input_sample[self.x_key]['data'],
+                self.input_sample[self.x_key]['data'],
+            )
+        else:
+            x, y = (
+                self.input_sample[0]['data'],
+                self.input_sample[1]['data'],
+            )
+        if self.logging and self.input_sample != None:
+
+            y_pred = self.forward(x)
+            diff = y - y_pred
+            ground_truth_grid = torchvision.utils.make_grid(
+                y[..., int(y.shape[-1] / 2)]
+            )  # slicing around middle
+            self.logger.experiment.add_image("ground-truth", ground_truth_grid, 0)
+            pred_grid = torchvision.utils.make_grid(
+                y_pred[..., int(y.shape[-1] / 2)]
+            )  # slicing around middle
+            self.logger.experiment.add_image("prediction", pred_grid, 0)
+            diff_grid = torchvision.utils.make_grid(
+                diff[..., int(y.shape[-1] / 2)]
+            )  # slicing around middle
+            self.logger.experiment.add_image("differences", diff_grid, 0)
+
+            # detach and log metrics
+            y = y.detach().numpy().squeeze()
+            y_pred = y_pred.detach().numpy().squeeze()
+            self.log("MSE", metrics.mean_squared_error(y, y_pred))
+            self.log("PSNR", metrics.peak_signal_noise_ratio(y, y_pred))
+            self.log("SSMI", metrics.structural_similarity(y, y_pred))
+        
         return None
 
     def training_step(self, batch, batch_idx) -> float:
-        if self.set_type == 'torchio':
+        if self.dataset_type == 'torchio':
             x, y = batch[self.x_key]["data"], batch[self.y_key]["data"]
         else:
             x, y = batch
+        #if slice dimension of batch == 1, squeeze
+        if x.shape[-1] == 1:
+            x = x.squeeze(-1)
+            y = y.squeeze(-1)
         y_pred = self.forward(x)
         loss = self.loss(y_pred, y)
         self.train_losses.append(loss.detach().cpu().numpy())
@@ -127,10 +185,14 @@ class ConvModule(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx) -> float:
-        if self.set_type == 'torchio':
+        if self.dataset_type == 'torchio':
             x, y = batch[self.x_key]["data"], batch[self.y_key]["data"]
         else:
             x, y = batch
+        #if slice dimension of batch == 1, squeeze
+        if x.shape[-1] == 1:
+            x = x.squeeze(-1)
+            y = y.squeeze(-1)
         y_pred = self.forward(x)
         loss = self.loss(y_pred, y)
         self.val_losses.append(loss.detach().cpu().numpy())
@@ -142,16 +204,392 @@ class ConvModule(pl.LightningModule):
         pass
 
     def on_fit_end(self) -> None:
-        os.mkdir('results' + str(self.logger.version) + '/')
+        os.mkdir('results' + '/' + str(self.logger.version) + '/')
         #log losses as image TODO: add labels on legend
         fig1 = plt.plot(range(len(self.train_losses)), self.train_losses, color='r', label='train')
-        fig1 = plt.plot(range(len(self.val_losses)), self.val_losses, color='g', label='validation') #TODO: repeat val_losses on len of train_loss ?
-        plt.savefig('results' +
-            str(self.logger.version) + '/'
-            + "losses.png"
-        )
+        fig2 = plt.plot(range(len(self.val_losses)), self.val_losses, color='g', label='validation') #TODO: repeat val_losses on len of train_loss ?
+        plt.savefig('results' + '/' + str(self.logger.version) + '/' + "losses.png")
+        if self.logging:
+            self.log_parameters()
         return None
 
+###############
+# AUTOENCODER #
+###############
+class AutoEncoder(ConvModule):
+    '''
+    Classical autoencoder for encoding of images in latente space
+    '''
+    def __init__(
+        self,
+        num_channels=[16, 32, 64, 128, 256],
+        input_sample = None,
+        activation_func: str = 'ReLU',
+        xp_parameters=None,
+        logging=False,
+        lr = 0.001
+    ):
+        super().__init__()
+        self.num_channels = num_channels
+        self.xp_parameters = xp_parameters
+        self.logging = logging
+        self.losses = []
+        self.dataset_type = 'default'
+        self.input_sample = input_sample
+        self.lr = lr
+        #if torchio dataset, adapt network to accept torchio keys
+        if isinstance(self.input_sample, dict):
+            self.dataset_type = 'torchio'
+            keys = []
+            for key in input_sample:
+                keys.append(key)
+            self.x_key = keys[0]
+            self.y_key = keys[1]
+
+        #2D or 3D conv
+        if self.dataset_type == 'torchio':
+            batch_shape = input_sample[self.x_key]['data'].shape
+        else:
+            batch_shape = input_sample[0].shape if input_sample else [0, 0, 0, 0] #default fake batch for 2D
+        
+        if len(batch_shape) == 5:
+            if batch_shape[-1] == 1:
+                conv_layer = nn.Conv2d
+                maxpool_layer = nn.MaxPool2d
+                upsample_layer = nn.Upsample
+            else:
+                conv_layer = nn.Conv3d
+                maxpool_layer = nn.MaxPool3d
+                upsample_layer = nn.Upsample
+        elif len(batch_shape) == 4:
+            conv_layer = nn.Conv2d
+            maxpool_layer = nn.MaxPool2d
+            upsample_layer = nn.Upsample
+
+        #activation function
+        activation_layer = string_to_activation_layer(activation_func)
+
+        layers = []
+
+        #Down layers
+        for idx in range(len(self.num_channels)):
+            in_channels = self.num_channels[idx - 1] if idx > 0 else 1
+            out_channels = self.num_channels[idx]
+            layer = conv_layer(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            )
+            layers.append(layer)
+            layers.append(activation_layer)
+
+            #maxpool between down layers
+            if idx < (len(self.num_channels) - 1):
+                if self.num_channels[idx] != self.num_channels[idx + 1]:
+                    layers.append(maxpool_layer(kernel_size=2)) #maxpool paramters?
+
+
+        #Up layers
+        self.num_channels.reverse()
+        for idx in range(len(self.num_channels)):
+            in_channels = self.num_channels[idx - 1] if idx > 0 else self.num_channels[idx]
+            out_channels = self.num_channels[idx]
+            layer = conv_layer(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            )
+            layers.append(layer)
+            layers.append(activation_layer)
+
+            #upconv between up layers
+            if idx < (len(self.num_channels) - 1):
+                if self.num_channels[idx] != self.num_channels[idx + 1]:
+                    layers.append(upsample_layer(
+                        scale_factor=2, 
+                        mode='nearest',
+                    )) 
+
+        #final layer, conv and softmax
+        last_layer = conv_layer(
+            in_channels=self.num_channels[-1],
+            out_channels=1,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+        )
+        layers.append(last_layer)
+        # layers.append(nn.Softmax())*
+        self.model = nn.Sequential(*layers)
+
+#####################
+# UNET Concatenated #
+#####################
+class UnetConcatenated(ConvModule):
+    '''
+    Skip connections are concatenated in this version
+    Paper reference: https://www.nature.com/articles/s41598-020-59801-x#Sec2
+    '''
+    def __init__(
+        self,
+        num_channels=[64, 128, 256,],
+        input_sample = None,
+        activation_func: str = 'ReLU',
+        xp_parameters=None,
+        logging=False,
+        lr = 0.001
+    ):
+        super().__init__()
+        self.num_channels = num_channels
+        self.xp_parameters = xp_parameters
+        self.logging = logging
+        self.losses = []
+        self.lr = lr
+        self.dataset_type = 'default'
+        self.input_sample = input_sample
+        #if torchio dataset, adapt network to accept torchio keys
+        if isinstance(self.input_sample, dict):
+            self.dataset_type = 'torchio'
+            keys = []
+            for key in input_sample:
+                keys.append(key)
+            self.x_key = keys[0]
+            self.y_key = keys[1]
+
+        #2D or 3D conv
+        if self.dataset_type == 'torchio':
+            batch_shape = input_sample[self.x_key]['data'].shape
+        else:
+            batch_shape = input_sample[0].shape if input_sample else [0, 0, 0, 0] #default fake batch for 2D
+        
+        if len(batch_shape) == 5:
+            if batch_shape[-1] == 1:
+                self.conv_layer = nn.Conv2d
+                self.maxpool_layer = nn.MaxPool2d
+                self.upsample_layer = nn.Upsample
+            else:
+                self.conv_layer = nn.Conv3d
+                self.maxpool_layer = nn.MaxPool3d
+                self.upsample_layer = nn.Upsample
+        elif len(batch_shape) == 4:
+            self.conv_layer = nn.Conv2d
+            self.maxpool_layer = nn.MaxPool2d
+            self.upsample_layer = nn.Upsample
+
+        #activation function
+        activation_layer = string_to_activation_layer(activation_func)
+
+        layers = []
+
+        #Down layers
+        for idx in range(len(self.num_channels)):
+            in_channels = self.num_channels[idx - 1] if idx > 0 else 1
+            out_channels = self.num_channels[idx]
+            layer = self.conv_layer(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            )
+            layers.append(layer)
+            layers.append(activation_layer)
+
+            #maxpool between down layers
+            if idx < (len(self.num_channels) - 1):
+                if self.num_channels[idx] != self.num_channels[idx + 1]:
+                    layers.append(self.maxpool_layer(kernel_size=2)) #maxpool paramters?
+
+
+        #Up layers
+        self.num_channels.reverse()
+        for idx in range(len(self.num_channels)):
+            in_channels = self.num_channels[idx - 1] if idx > 0 else self.num_channels[idx]
+            out_channels = self.num_channels[idx]
+            if in_channels > out_channels:
+                in_channels *= 1.5
+            layer = self.conv_layer(
+                in_channels=int(in_channels),
+                out_channels=out_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            )
+            layers.append(layer)
+            layers.append(activation_layer)
+
+            #upconv between up layers
+            if idx < (len(self.num_channels) - 1):
+                if self.num_channels[idx] != self.num_channels[idx + 1]:
+                    layers.append(self.upsample_layer(
+                        scale_factor=2, 
+                        mode='nearest',
+                    )) 
+
+        #final layer, conv and softmax
+        last_layer = self.conv_layer(
+            in_channels=self.num_channels[-1],
+            out_channels=1,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+        )
+        layers.append(last_layer)
+        # layers.append(nn.Softmax())
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x):
+        skip_connections = []
+        for i, layer  in enumerate(self.model):
+            if i == 0 or i == (len(self.model) - 1): #deal with first and last layer for out of indice
+                x = layer.forward(x)
+            else:
+                #if need save skip = if max pool comes
+                if isinstance(self.model[i + 1], self.maxpool_layer):
+                    skip_connections.append(x)
+                #if needs cat meaning if previous is upsampling
+                if isinstance(self.model[i - 1], self.upsample_layer):
+                    pop = skip_connections.pop()
+                    x = torch.cat((x, pop), 1)
+                x = layer.forward(x)
+        return x
+        
+##############
+# UNET added #
+##############
+class UnetAdded(ConvModule):
+    '''
+    Skip connections are added in this version
+    Paper reference: https://www.nature.com/articles/s41598-020-59801-x#Sec2
+    '''
+    def __init__(
+        self,
+        num_channels=[64, 128, 256,],
+        input_sample = None,
+        activation_func: str = 'ReLU',
+        xp_parameters=None,
+        logging=False,
+        lr = 0.001
+    ):
+        super().__init__()
+        self.num_channels = num_channels
+        self.xp_parameters = xp_parameters
+        self.logging = logging
+        self.losses = []
+        self.lr = lr
+        self.dataset_type = 'default'
+        self.input_sample = input_sample
+        #if torchio dataset, adapt network to accept torchio keys
+        if isinstance(self.input_sample, dict):
+            self.dataset_type = 'torchio'
+            keys = []
+            for key in input_sample:
+                keys.append(key)
+            self.x_key = keys[0]
+            self.y_key = keys[1]
+
+        #2D or 3D conv
+        if self.dataset_type == 'torchio':
+            batch_shape = input_sample[self.x_key]['data'].shape
+        else:
+            batch_shape = input_sample[0].shape if input_sample else [0, 0, 0, 0] #default fake batch for 2D
+        
+        if len(batch_shape) == 5:
+            if batch_shape[-1] == 1:
+                self.conv_layer = nn.Conv2d
+                self.maxpool_layer = nn.MaxPool2d
+                self.upsample_layer = nn.Upsample
+            else:
+                self.conv_layer = nn.Conv3d
+                self.maxpool_layer = nn.MaxPool3d
+                self.upsample_layer = nn.Upsample
+        elif len(batch_shape) == 4:
+            self.conv_layer = nn.Conv2d
+            self.maxpool_layer = nn.MaxPool2d
+            self.upsample_layer = nn.Upsample
+
+        #activation function. 
+        activation_layer = string_to_activation_layer(activation_func)
+
+        layers = []
+
+        #Down layers
+        for idx in range(len(self.num_channels)):
+            in_channels = self.num_channels[idx - 1] if idx > 0 else 1
+            out_channels = self.num_channels[idx]
+            layer = self.conv_layer(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            )
+            layers.append(layer)
+            layers.append(activation_layer)
+
+            #maxpool between down layers
+            if idx < (len(self.num_channels) - 1):
+                if self.num_channels[idx] != self.num_channels[idx + 1]:
+                    layers.append(self.maxpool_layer(kernel_size=2)) #maxpool paramters?
+
+
+        #Up layers
+        self.num_channels.reverse()
+        for idx in range(len(self.num_channels)):
+            in_channels = self.num_channels[idx - 1] if idx > 0 else self.num_channels[idx]
+            out_channels = self.num_channels[idx]
+            layer = self.conv_layer(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            )
+            layers.append(layer)
+            layers.append(activation_layer)
+
+            #upconv between up layers
+            if idx < (len(self.num_channels) - 1):
+                if self.num_channels[idx] != self.num_channels[idx + 1]:
+                    layers.append(self.upsample_layer(
+                        scale_factor=2, 
+                        mode='nearest',
+                    )) 
+
+        #final layer, conv and softmax
+        last_layer = self.conv_layer(
+            in_channels=self.num_channels[-1],
+            out_channels=1,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+        )
+        layers.append(last_layer)
+        # layers.append(nn.Softmax())
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x):
+        skip_connections = []
+        for i, layer  in enumerate(self.model):
+            if i == 0 or i == (len(self.model) - 1): #deal with first and last layer for out of indice
+                x = layer.forward(x)
+            else:
+                #if need save skip = if max pool comes
+                if isinstance(self.model[i + 1], self.maxpool_layer):
+                    skip_connections.append(x)
+                #if needs cat meaning if previous is upsampling
+                if isinstance(self.model[i - 1], self.upsample_layer):
+                    pop = skip_connections.pop()
+                    x = x + pop
+                x = layer.forward(x)
+        return x
+
+
+#LEGACY CODE
 ###############
 # Autoencoder #
 ###############
@@ -280,10 +718,7 @@ class ThreeDCNN(pl.LightningModule):
             self.log_parameters()
         return None
         
-##########
-#  UNET  #
-##########
-class Unet(pl.LightningModule):
+class Unet_legacy(pl.LightningModule):
     '''
     Skip connections are concatenated in this version
     Paper reference: https://www.nature.com/articles/s41598-020-59801-x#Sec2
@@ -467,6 +902,49 @@ class Unet(pl.LightningModule):
             self.log_parameters()
         return None
 
+class SeparableConv2d(torch.nn.Module):
+    '''
+    source: https://gist.github.com/bdsaglam/84b1e1ba848381848ac0a308bfe0d84c
+    '''
+    def __init__(self, 
+                 in_channels,
+                 out_channels,
+                 kernel_size=3,
+                 stride=1,
+                 padding=0,
+                 dilation=1,
+                 bias=True,
+                 padding_mode='zeros',
+                 depth_multiplier=1,
+        ):
+        super().__init__()
+        
+        intermediate_channels = in_channels * depth_multiplier
+        self.spatialConv = torch.nn.Conv2d(
+             in_channels=in_channels,
+             out_channels=intermediate_channels,
+             kernel_size=kernel_size,
+             stride=stride,
+             padding=padding,
+             dilation=dilation,
+             groups=in_channels,
+             bias=bias,
+             padding_mode=padding_mode
+        )
+        self.pointConv = torch.nn.Conv2d(
+             in_channels=intermediate_channels,
+             out_channels=out_channels,
+             kernel_size=1,
+             stride=1,
+             padding=0,
+             dilation=1,
+             bias=bias,
+             padding_mode=padding_mode,
+        )
+    
+    def forward(self, x):
+        return self.pointConv(self.spatialConv(x))
+
 #debugging
 if __name__ == "__main__":
     #create lightweight dataloader, normat torch and torchIO
@@ -481,8 +959,7 @@ if __name__ == "__main__":
 
     dataloader = DataLoader(dataset=LitDataset(), batch_size=1, shuffle=False)
 
-    cnn = ThreeDCNN()
-    unet = Unet()
+    model = AutoEncoder()
     
     print('finished')
 
