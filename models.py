@@ -230,7 +230,7 @@ class AutoEncoder(ConvModule):
         lr = 0.001
     ):
         super().__init__()
-        self.num_channels = num_channels
+        self.num_channels = list(num_channels)
         self.xp_parameters = xp_parameters
         self.logging = logging
         self.losses = []
@@ -344,7 +344,7 @@ class UnetConcatenated(ConvModule):
         lr = 0.001
     ):
         super().__init__()
-        self.num_channels = num_channels
+        self.num_channels = list(num_channels)
         self.xp_parameters = xp_parameters
         self.logging = logging
         self.losses = []
@@ -476,7 +476,7 @@ class UnetAdded(ConvModule):
         lr = 0.001
     ):
         super().__init__()
-        self.num_channels = num_channels
+        self.num_channels = list(num_channels)
         self.xp_parameters = xp_parameters
         self.logging = logging
         self.losses = []
@@ -582,7 +582,7 @@ class UnetAdded(ConvModule):
                 if isinstance(self.model[i + 1], self.maxpool_layer):
                     skip_connections.append(x)
                 #if needs cat meaning if previous is upsampling
-                if isinstance(self.model[i - 1], self.upsample_layer):
+                if isinstance(self.model[i - 1], self.upsample_layer): #TODO test i - 1 and reformatting of pop
                     pop = skip_connections.pop()
                     x = x + pop
                 x = layer.forward(x)
@@ -606,7 +606,7 @@ class ThreeDCNN(pl.LightningModule):
         **kwargs,
     ):
         super().__init__()
-        self.num_channels = num_channels
+        self.num_channels = list(num_channels)
         self.activation_func = activation_func
         self.kernel_size = kernel_size
         self.xp_parameters = xp_parameters
@@ -733,7 +733,7 @@ class Unet_legacy(pl.LightningModule):
         lr = 0.001
     ):
         super().__init__()
-        self.num_channels = num_channels
+        self.num_channels = list(num_channels)
         self.xp_parameters = xp_parameters
         self.logging = logging
         self.losses = []

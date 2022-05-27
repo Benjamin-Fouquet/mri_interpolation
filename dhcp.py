@@ -22,6 +22,7 @@ import sys
 from typing import Tuple, Union, Dict
 from matplotlib import transforms
 from dataclasses import dataclass
+import argparse
 
 import matplotlib.pyplot as plt
 import nibabel as nib
@@ -40,17 +41,20 @@ gpu = [0] if torch.cuda.is_available() else []
 #placeholder dataclass for hydra config // can you set it up on the flight via command line easily ? or call alternative configuration on the fly
 @dataclass
 class Config:
-    model_class: pl.LightningModule = ConvModule,
+    model_class: pl.LightningModule = UnetConcatenated
     batch_size: int = 32
     max_subjects: int = 10
     dhcp_path: str = "data/DHCP_seg/"
     baboon_path: str ='data/baboon_seg/'
-    batch_size: int = 32
     patch_size: Union[int, Tuple[int, ...]] = (64, 64, 1)
     patch_overlap: Union[int, Tuple[int, ...]] = None
-    max_epochs: int = 5
-    num_channels: Tuple[int, ...] = [8, 32, 64, 128,]
+    max_epochs: int = 1
+    num_channels: Tuple[int, ...] = (64, 128, 256,)
 
+    def export_to_txt(self, file_path: str = '') -> None:
+        with open(file_path + 'config.txt', 'w') as f:
+            for key in self.__dict__:
+                f.write(str(key) + ' : ' + str(self.__dict__[key]) + '\n')
 
 config = Config()
 
@@ -186,7 +190,7 @@ mri_dataloader.setup()
 batch = next(iter(mri_dataloader.train_dataloader()))
 
 # model = AutoEncoder(input_sample=batch, num_channels=[4, 8, 16, 32, 32, 16, 8, 4])
-model = UnetConcatenated(input_sample=batch, num_channels=config.num_channels)
+model = config.model_class(input_sample=batch, num_channels=config.num_channels)
 
 trainer = pl.Trainer(gpus=gpu, max_epochs=config.max_epochs)
 
@@ -198,7 +202,7 @@ baboon_image = nib.load(
     "data/baboon_seg/sub-Formule_ses-03_T2_HASTE_AX2_12_crop_seg.nii.gz"
 )
 baboon_image = torch.FloatTensor(baboon_image.get_fdata()).squeeze(-1)
-if isinstance(model, Unet):
+if isinstance(model, UnetConcatenated):
     baboon_image = torch.FloatTensor(np.vstack([baboon_image[:,:96,:], np.zeros((2, 96, 27))]))
 # pred = model(baboon_image[:, :, 13].unsqueeze(0).unsqueeze(0).unsqueeze(-1))
 pred = model.forward(baboon_image[:, :, 13].unsqueeze(0).unsqueeze(0).squeeze(-1)) #TODO: correct the ugly code
@@ -225,8 +229,8 @@ pred = model.forward(x[:,:,:,34].unsqueeze(0))
 # y = y[:,:,:,int(y.shape[3] / 2)].detach().numpy().squeeze(0)
 # pred = pred[:,:,:,:,int(pred.shape[4] / 2)].detach().numpy().squeeze(0).squeeze(0)
 #2D case
-x = x[:,:,34].detach().numpy().squeeze(0)
-y = y[:,:,34].detach().numpy().squeeze(0)
+x = x[:,:,:,34].detach().numpy().squeeze(0)
+y = y[:,:,:,34].detach().numpy().squeeze(0)
 pred = pred.detach().numpy().squeeze(0).squeeze(0)
 
 image_list = [x, y, pred]
@@ -236,6 +240,10 @@ for i, img in enumerate(image_list):
 
 plt.savefig('results' + '/' + str(model.logger.version) + '/' + 'x_y_pred.png')
 plt.clf()
+
+file_path = 'results' + '/' + str(model.logger.version) + '/'
+
+config.export_to_txt(file_path=file_path)
 
 
 # nib.save(img=pred_nii_image, filename="predicition.nii.gz")

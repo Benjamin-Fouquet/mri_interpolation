@@ -20,17 +20,23 @@ dhcp_image['data'] = dhcp_image['data'][:, :, 100, :].unsqueeze(-1)
 down_factor = 3.0
 
 #create a random transformation = create a list of transformation parameters
-degrees_list = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
-translations_list = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
-num_transforms_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-image_interpolation_list = ['linear', 'nearest', 'gaussian', 'bspline', 'welch'] 
+degrees_list = [5, 10, 15, 20, 30, 40, 50]
+translations_list = [0,]
+num_transforms_list = [1, 2, 3, 4, 6, 8, 10]
+image_interpolation_list = ['linear', 'nearest', 'gaussian', 'bspline',]
 
-for degrees in degrees_list:
-    for translations in translations_list:
+
+for translations in translations_list:       
+    for image_interpolation in image_interpolation_list:
         for num_transforms in num_transforms_list:
-            for image_interpolation in image_interpolation_list:
+            for degrees in degrees_list:
 
-                image_degrad = tio.transforms.RandomMotion(degrees=degrees, translation=translations, num_transforms=num_transforms, image_interpolation=image_interpolation)(dhcp_image),
+                transforms = [
+                    tio.transforms.RandomMotion(degrees=degrees, translation=translations, num_transforms=num_transforms, image_interpolation=image_interpolation),
+                ]
+
+
+                image_degrad = tio.transforms.Compose(transforms=transforms)(dhcp_image),
                 image_lowres = tio.Resample(
                     (
                         dhcp_image.spacing[0] * down_factor,
