@@ -125,7 +125,7 @@ class MiniRunner:
         model: pl.LightningModule,
         datamodule: pl.LightningDataModule,
         hyperparameters: Hyperparameters,
-        gpu=[2],
+        gpu=[0],
     ) -> None:
         self.datamodule = datamodule
         self.datamodule.setup()
@@ -173,7 +173,7 @@ class MiniRunner:
 
 phi_channels = [128, 128]
 phi_lr = 0.001
-epochs = 1
+epochs = 10
 lr = 0.001
 batch_size = 16
 output_path = "results/"
