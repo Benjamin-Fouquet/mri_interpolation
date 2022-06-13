@@ -103,7 +103,7 @@ class MriDataModule(pl.LightningDataModule):
             #normalize
             t2 = tio.RescaleIntensity(out_min_max=(0, 1))(tio.ScalarImage(t2_path))
             transforms = [
-                tio.transforms.RandomMotion(degrees=10, translation=5, num_transforms=8, image_interpolation='linear'),
+                tio.transforms.RandomMotion(degrees=20, translation=20, num_transforms=4, image_interpolation='linear'),
                 tio.Resample(
                     (
                         t2.spacing[0] * down_factor,

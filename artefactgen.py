@@ -2,19 +2,37 @@
 AIM: procedural generation of artefact data for test in comparison with baboon images
 
 '''
+from matplotlib.colors import Colormap
 import torchio as tio
 import matplotlib.pyplot as plt
 from utils import show_slices
 import os
+import nibabel as nib
+from scipy.fft import ifft, fft
 
 
 baboon_path = "data/baboon_seg/sub-Formule_ses-03_T2_HASTE_AX_9_crop_seg.nii.gz"
 dhcp_path = "data/DHCP_seg/sub-CC00060XX03_ses-12501_t2_seg.nii.gz"
 
+# bab = nib.load(baboon_path)
+# data = bab.get_fdata()[:,:,18]
+# plt.imshow(data, cmap='gray')
+# plt.show()
+# fou = fft(data)
+
+# for slices in fou[:,:,]:
+#     fou[30].real *= 0.7
+#     fou[30].imag *= 1.3
+
+# plt.imshow(ifft(fou).real, cmap='gray')
+# plt.show()
+
+
+
 baboon_image = tio.RescaleIntensity(out_min_max=(0, 1))(tio.ScalarImage(baboon_path))
 dhcp_image = tio.RescaleIntensity(out_min_max=(0, 1))(tio.ScalarImage(dhcp_path))
 
-# baboon_image['data'] = baboon_image['data'][:, :, :, 15].unsqueeze(-1)
+baboon_image['data'] = baboon_image['data'][:, :, :, 15].unsqueeze(-1)
 # dhcp_image['data'] = dhcp_image['data'][:, :, 100, :].unsqueeze(-1)
 
 down_factor = 3.0
@@ -25,7 +43,8 @@ translations_list = [0,10, 20]
 num_transforms_list = [1, 2, 3, 4, 6, 8, 10]
 image_interpolation_list = ['linear', 'nearest', 'gaussian', 'bspline',]
 
-degrad = tio.transforms.RandomMotion(degrees=20, translation=20, num_transforms=4, image_interpolation='linear')(dhcp_image)
+degrad = tio.transforms.RandomMotion(degrees=5, translation=5, num_transforms=6, image_interpolation='linear')(dhcp_image)
+# degrad = tio.transforms.RandomGhosting(num_ghosts=4, axes=2, intensity=(0.5, 1), restore=0.02)(dhcp_image)
 
 show_slices(degrad)
 

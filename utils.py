@@ -7,7 +7,7 @@ from typing import Tuple, Union, Dict
 
 def show_slices(image: Union[np.ndarray, tio.data.image.ScalarImage, nib.nifti1.Nifti1Image]) -> None:
     """
-    TODO:
+    TODO: 2D implementation
     """
     if isinstance(image, nib.nifti1.Nifti1Image):
         data = image.get_fdata()
