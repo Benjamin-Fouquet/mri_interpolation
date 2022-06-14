@@ -43,7 +43,7 @@ translations_list = [0,10, 20]
 num_transforms_list = [1, 2, 3, 4, 6, 8, 10]
 image_interpolation_list = ['linear', 'nearest', 'gaussian', 'bspline',]
 
-degrad = tio.transforms.RandomMotion(degrees=5, translation=5, num_transforms=6, image_interpolation='linear')(dhcp_image)
+degrad = tio.transforms.RandomMotion(degrees=5, translation=5, num_transforms=4, image_interpolation='linear')(dhcp_image)
 # degrad = tio.transforms.RandomGhosting(num_ghosts=4, axes=2, intensity=(0.5, 1), restore=0.02)(dhcp_image)
 
 show_slices(degrad)
