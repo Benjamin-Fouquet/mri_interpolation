@@ -41,14 +41,14 @@ gpu = [0] if torch.cuda.is_available() else []
 #placeholder dataclass for hydra config // can you set it up on the flight via command line easily ? or call alternative configuration on the fly
 @dataclass
 class Config:
-    model_class: pl.LightningModule = AutoEncoder
+    model_class: pl.LightningModule = UnetAdded
     batch_size: int = 32
-    max_subjects: int = 100
+    max_subjects: int = 10
     dhcp_path: str = "data/DHCP_seg/"
     baboon_path: str ='data/baboon_seg/'
     patch_size: Union[int, Tuple[int, ...]] = (64, 64, 1)
     patch_overlap: Union[int, Tuple[int, ...]] = None
-    max_epochs: int = 50
+    max_epochs: int = 1
     num_channels: Tuple[int, ...] = (32, 64, 128, 64, 32)
 
     def export_to_txt(self, file_path: str = '') -> None:
@@ -98,7 +98,7 @@ class MriDataModule(pl.LightningDataModule):
         all_t2s = glob.glob(self.dhcp_path + '*_t2_seg.nii.gz', recursive=True)[:self.max_subjects]
         subjects = []
         down_factor = 3.0
-        # DHCP data for train and val
+        # DHCP data for train and val   
         for t2_path in all_t2s:
             #normalize
             t2 = tio.RescaleIntensity(out_min_max=(0, 1))(tio.ScalarImage(t2_path))
@@ -130,6 +130,9 @@ class MriDataModule(pl.LightningDataModule):
                     image_interpolation="gaussian",
             )(t2)
             t2_degrad = tio.transforms.Compose(transforms)(t2)
+            #Reshape for test
+            t2_lowres.data = np.transpose(t2_lowres.data, (0, 1, 3, 2))
+            t2_degrad.data = np.transpose(t2_degrad.data, (0, 1, 3, 2))
             subjects.append(tio.Subject(t2=t2_lowres, t2_degrad=t2_degrad))
 
         #test data (use with care)
@@ -172,9 +175,9 @@ class MriDataModule(pl.LightningDataModule):
 
     def get_dataset(self, datatype: str = 'train')-> tio.SubjectsDataset:
         if datatype == 'train':
-            return self.subjects_dataset
+            return self.train_ds
         if datatype == 'val':
-            return self.subjects_dataset
+            return self.val_ds
         if datatype == 'test':
             return self.test_ds
 
