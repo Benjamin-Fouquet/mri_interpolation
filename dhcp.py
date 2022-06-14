@@ -1,6 +1,5 @@
 '''
 TODO:
-
 -try SeparableConv2D as drop in replacement for 2D conv
 -checkpoints for easy save/load of model
 -automated 10% patch overlap
@@ -41,7 +40,7 @@ gpu = [0] if torch.cuda.is_available() else []
 #placeholder dataclass for hydra config // can you set it up on the flight via command line easily ? or call alternative configuration on the fly
 @dataclass
 class Config:
-    model_class: pl.LightningModule = AutoEncoder
+    model_class: pl.LightningModule = ConvModule
     batch_size: int = 32
     max_subjects: int = 100
     dhcp_path: str = "data/DHCP_seg/"
@@ -71,11 +70,11 @@ class MriDataModule(pl.LightningDataModule):
     '''
     def __init__(
         self,
-        dhcp_path: str = "data/DHCP_seg/",
-        baboon_path: str ='data/baboon_seg/',
-        max_subjects: int = 10, #max is 490
-        batch_size: int = 32,
-        patch_size: Union[int, Tuple[int, ...]] = (64, 64, 1),
+        dhcp_path: str,
+        baboon_path: str,
+        max_subjects: int, #max is 490
+        batch_size: int,
+        patch_size: Union[int, Tuple[int, ...]],
         patch_overlap: Union[int, Tuple[int, ...]] = None, #no effect atm
         *args,
         **kwargs
@@ -103,7 +102,7 @@ class MriDataModule(pl.LightningDataModule):
             #normalize
             t2 = tio.RescaleIntensity(out_min_max=(0, 1))(tio.ScalarImage(t2_path))
             transforms = [
-                tio.transforms.RandomMotion(degrees=20, translation=20, num_transforms=4, image_interpolation='linear'),
+                tio.transforms.RandomMotion(degrees=5, translation=5, num_transforms=6, image_interpolation='linear'),
                 tio.Resample(
                     (
                         t2.spacing[0] * down_factor,
@@ -180,9 +179,10 @@ class MriDataModule(pl.LightningDataModule):
 
 # a dataset
 mri_dataloader = MriDataModule(
-    mri_path=config.dhcp_path,
+    dhcp_path=config.dhcp_path,
     baboon_path=config.baboon_path,
     batch_size=config.batch_size,
+    patch_size=config.patch_size,
     max_subjects=config.max_subjects,
 )
 mri_dataloader.setup()
