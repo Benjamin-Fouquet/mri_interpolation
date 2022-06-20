@@ -40,15 +40,15 @@ gpu = [0] if torch.cuda.is_available() else []
 #placeholder dataclass for hydra config // can you set it up on the flight via command line easily ? or call alternative configuration on the fly
 @dataclass
 class Config:
-    model_class: pl.LightningModule = UnetAdded
+    model_class: pl.LightningModule = UnetConcatenated
     batch_size: int = 32
-    max_subjects: int = 10
+    max_subjects: int = 100
     dhcp_path: str = "data/DHCP_seg/"
     baboon_path: str ='data/baboon_seg/'
     patch_size: Union[int, Tuple[int, ...]] = (64, 64, 1)
     patch_overlap: Union[int, Tuple[int, ...]] = None
-    max_epochs: int = 1
-    num_channels: Tuple[int, ...] = (32, 64, 128, 64, 32)
+    max_epochs: int = 50
+    num_channels: Tuple[int, ...] = (32, 64, 128, 256)
 
     def export_to_txt(self, file_path: str = '') -> None:
         with open(file_path + 'config.txt', 'w') as f:
@@ -173,6 +173,8 @@ class MriDataModule(pl.LightningDataModule):
         return DataLoader(self.test_ds, num_workers=multiprocessing.cpu_count() if not self.patch_size else 0)
 
     def get_dataset(self, datatype: str = 'train')-> tio.SubjectsDataset:
+        if datatype == 'full':
+            return self.subjects_dataset
         if datatype == 'train':
             return self.train_ds
         if datatype == 'val':
@@ -220,7 +222,7 @@ plt.savefig('results' + '/' + str(model.logger.version) + '/' + 'baboon_pred.png
 plt.clf()
 
 #output for classic prediction
-batch = next(iter(mri_dataloader.get_dataset()))
+batch = next(iter(mri_dataloader.get_dataset(datatype='full')))
 x = batch['t2_degrad']['data']
 y = batch['t2']['data']
 if isinstance(model, UnetAdded) or isinstance(model, UnetConcatenated):
