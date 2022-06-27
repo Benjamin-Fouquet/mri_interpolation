@@ -115,7 +115,7 @@ class ConvModule(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
 
-    def loss(self, y_pred:torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def loss(self, y_pred: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         return nn.functional.mse_loss(y_pred, y)
 
     def configure_optimizers(self) -> torch.optim.Adam:

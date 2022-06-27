@@ -210,7 +210,7 @@ baboon_image = torch.FloatTensor(baboon_image.get_fdata()).squeeze(-1)
 if isinstance(model, UnetConcatenated):
     baboon_image = torch.FloatTensor(np.vstack([baboon_image[:,:96,:], np.zeros((2, 96, 27))]))
 # pred = model(baboon_image[:, :, 13].unsqueeze(0).unsqueeze(0).unsqueeze(-1))
-pred = model.forward(baboon_image[:, :, 13].unsqueeze(0).unsqueeze(0).squeeze(-1)) #TODO: correct the ugly code
+pred = model.forward(baboon_image[:, :, 13].unsqueeze(0).unsqueeze(0).squeeze(-1)) #TODO: correct the ugly code ACHTUNG: do not call forwar direclty. Call model(x) instead
 image_pred = pred.detach().numpy().squeeze()
 # pred_nii_image = nib.Nifti1Image(image_pred, affine=np.eye(4))
 image_list = [baboon_image[:, :, 13], image_pred]

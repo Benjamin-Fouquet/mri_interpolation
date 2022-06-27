@@ -4,3 +4,4 @@ data/
 .vscode/
 lightning_logs/
 __pycache__/
+results_siren/
