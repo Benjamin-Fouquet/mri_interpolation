@@ -1,9 +1,14 @@
+'''
+You are working on the 3D version of hte code (2D works both with acc gradient and without)
+Also, correct epohcs term: 1 epoch = dataset seen once in its totality !
+'''
+
 import torch
+import pytorch_lightning as pl
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from torch import nn
 from siren_pytorch import SirenNet, Siren
-import pytorch_lightning as pl
 import nibabel as nib
 import numpy as np
 import skimage
@@ -21,22 +26,23 @@ import time
 @dataclass
 class Config:
     #Experiment parameters
-    batch_size: int = 125000 #300000 max at 512 for 3D, 84100 complete image for 2D
-    epochs:int = 300
+    batch_size: int = 1024 #524288 #300000 max at 512 for 3D, 84100 complete image for 2D
+    epochs:int = 100
     image_path: str = 'data/DHCP_seg/sub-CC00060XX03_ses-12501_t2_seg.nii.gz'
-    output_size: int = 290
+    output_size: int = 128
     num_workers: int = multiprocessing.cpu_count() 
-    gradients_acculumation: bool = False
+    gradients_accumulation: bool = False
     n_acc_batch: int = 10
-    renew_batch: bool = False #Set to True if the batch does not include the whole image. Set to False for 10x performance
+    renew_batch: bool = True if gradients_accumulation else False #Set to True if the batch does not include the whole image. Set to False for 10x performance
 
     #SirenModule parameters
-    dim_in: int = 3
-    dim_hidden: int = 256
+    dim_in: int = 2
+    dim_hidden: int = 512
     dim_out: int = 1
     num_layers: int = 5
     final_activation: torch.nn.modules.activation = None
-    w0_initial: float = 300.
+    w0_initial: float = 30.
+    w0: int = 30.
     learning_rate: float = 0.001
 
     #output
@@ -58,18 +64,32 @@ def get_mgrid(sidelen, dim=3):
     mgrid = torch.stack(torch.meshgrid(*tensors), dim=-1)
     return mgrid
 
+def get_mgrid(shape):
+    tensors = []
+    for dim in shape:
+        tensor = torch.linspace(-1, 1, steps=dim) * len(shape)
+        tensors.append(tensor) 
+    mgrid = torch.stack(torch.meshgrid(*tensors), dim=-1)
+    return mgrid
+
+
 class MriImage(Dataset):
     def __init__(self, image_path):
         super().__init__()
         image = nib.load(image_path)
+        image = image.get_fdata()    #[64:192, 64:192, 100:164]
         if config.dim_in == 3:
-            mgrid = get_mgrid(np.max(image.shape))
-            mgrid = mgrid[:,:,:image.shape[2],:]  #Break -1 1 asumption in reshape directions
+            x = torch.linspace(-1, 1, steps=image.shape[0])
+            y = torch.linspace(-1, 1, steps=image.shape[1])
+            z = torch.linspace(-1, 1, steps=image.shape[2])
+            mgrid = torch.stack(torch.meshgrid(x,y,z), dim=-1)
         if config.dim_in == 2:
-            mgrid = get_mgrid(image.shape[0], dim=config.dim_in) #[:,:,150]
+            x = torch.linspace(-1, 1, steps=image.shape[0])
+            y = torch.linspace(-1, 1, steps=image.shape[1])
+            mgrid = torch.stack(torch.meshgrid(x,y,z), dim=-1)
 
         #create data tensors
-        pixels = torch.FloatTensor(image.get_fdata())
+        pixels = torch.FloatTensor(image)
         if config.dim_in == 2:
             pixels = pixels[:,:,int(pixels.shape[2] / 2)]
         pixels = pixels.flatten()
@@ -133,6 +153,7 @@ model = SirenNet(
         dim_out=config.dim_out,
         num_layers=config.num_layers,
         final_activation=config.final_activation,
+        w0 = config.w0,
         w0_initial=config.w0_initial,
 ) 
 
@@ -142,41 +163,34 @@ model = SirenNet(
 losses = []
 model.cuda()
 optim = torch.optim.Adam(lr=config.learning_rate, params=model.parameters())
-model_input, ground_truth = next(iter(dataloader))
-model_input, ground_truth = model_input.cuda(), ground_truth.cuda()
+# loss = F.mse_loss(ground_truth, ground_truth)
 training_start = int(time.time())
-if config.gradients_acculumation is False:
+if config.gradients_accumulation is False:
     for epoch in range(config.epochs):
-        if config.renew_batch:
-            model_input, ground_truth = next(iter(dataloader))
+        for model_input, ground_truth in dataloader:
             model_input, ground_truth = model_input.cuda(), ground_truth.cuda()    
-        model_output = model(model_input)  
-        loss = F.mse_loss(model_output, ground_truth)
-        losses.append(loss.detach().cpu().numpy())
-
-        print("Step %d, Total loss %0.6f" % (epoch, loss))
-
-        optim.zero_grad()
-        loss.backward()
-        optim.step()
-
-if config.gradients_acculumation is True:
-    for epoch in range(config.epochs):
-        # model_output, coords = model(model_input)
-        model_input, ground_truth = next(iter(dataloader))
-        model_input, ground_truth = model_input.cuda(), ground_truth.cuda()    
-        model_output = model(model_input)  
-        loss = F.mse_loss(model_output, ground_truth)
-        loss.backward()
-        # loss_batch = F.mse_loss(model_output, ground_truth)
-        # loss += loss_batch / config.n_acc_batch
-
-        if epoch % config.n_acc_batch == 0:
-            print("Step %d, Total loss %0.6f" % (epoch, loss))
-            optim.step()
-            optim.zero_grad()
+            model_output = model(model_input)  
+            loss = F.mse_loss(model_output, ground_truth)
             losses.append(loss.detach().cpu().numpy())
-            # loss = F.mse_loss(ground_truth, ground_truth) #set loss back to zero
+
+            print("Step %d, Total loss %0.6f" % (epoch, loss))
+
+            optim.zero_grad()
+            loss.backward()
+            optim.step()
+
+if config.gradients_accumulation is True: #successfully in 2D
+    for epoch in range(config.epochs):
+        for model_input, ground_truth in dataloader:
+            model_input, ground_truth = model_input.cuda(), ground_truth.cuda()    
+            model_output = model(model_input)
+            loss = F.mse_loss(model_output, ground_truth) / config.n_acc_batch
+            loss.backward()
+            if epoch % config.n_acc_batch == 0:
+                print("Step %d, Total loss %0.6f" % (epoch, loss))
+                optim.step()
+                optim.zero_grad()
+                losses.append(loss.detach().cpu().numpy())
 
 training_stop = int(time.time())
 ######################
@@ -191,27 +205,38 @@ if os.path.isdir(filepath) is False:
 model.to('cpu')
 torch.save(model.state_dict(), filepath + 'checkpoint.pt')
 
-#create the validation and output
-mgrid = get_mgrid(config.output_size, dim=config.dim_in)
-if config.dim_in == 3:
-    mgrid = mgrid[:,:,int(mgrid.shape[-1] / 2)]
-
-mgrid = torch.FloatTensor(mgrid).reshape(config.output_size * config.output_size , config.dim_in).unsqueeze(0)
-
 #ground truth
 ground_truth = nib.load(config.image_path)
-ground_truth = ground_truth.get_fdata(dtype=np.float32)[:,:,int(ground_truth.shape[-1] / 2)]
+ground_truth = ground_truth.get_fdata(dtype=np.float32) #[:,:,int(ground_truth.shape[-1] / 2)] [64:128, 64:128, 96]
 ground_truth = (ground_truth - np.min(ground_truth)) / (np.max(ground_truth) - np.min(ground_truth)) * 2 - 1
+#nifti here
+if len(ground_truth.shape) == 3:
+    ground_truth = ground_truth[:,:,int(ground_truth.shape[-1] / 2)]
 fig = plt.imshow(ground_truth, cmap='gray', vmin=-1.0, vmax=1.0)
 plt.savefig(filepath + 'ground_truth.png')
 plt.clf()
 
+#create the validation and output
+if config.dim_in == 3:
+    x = torch.linspace(-1, 1, steps=ground_truth.shape[0])
+    y = torch.linspace(-1, 1, steps=ground_truth.shape[1])
+    z = torch.linspace(-1, 1, steps=ground_truth.shape[2])
+    mgrid = torch.stack(torch.meshgrid(x,y,z), dim=-1)
+if config.dim_in == 2:
+    x = torch.linspace(-1, 1, steps=ground_truth.shape[0])
+    y = torch.linspace(-1, 1, steps=ground_truth.shape[1])
+    mgrid = torch.stack(torch.meshgrid(x,y,z), dim=-1)
+    
+mgrid = torch.FloatTensor(mgrid).reshape(ground_truth * ground_truth , config.dim_in).unsqueeze(0)
+
 pred = model(mgrid)
 #reshape to image, take a 2D view
 pred = pred.squeeze(0)
-pred = pred.reshape(config.output_size, config.output_size)
+pred = pred.reshape(ground_truth.shape)
 pred = pred.detach().numpy()
-
+#nifti here
+if len(pred.shape) == 3:
+    pred = pred[:,:,int(pred.shape[-1] / 2)]
 fig = plt.imshow(pred, cmap='gray', vmin=-1.0, vmax=1.0)
 plt.savefig(filepath + 'results_sample.png')
 plt.clf()
@@ -227,11 +252,13 @@ plt.savefig(filepath + 'losses.png')
 
 config.export_to_txt(filepath)
 
+#metrics
 with open (filepath + 'scores.txt', 'w') as f:
     f.write('MSE : ' + str(metrics.mean_squared_error(ground_truth, pred)) + '\n')
     f.write('PSNR : ' + str(metrics.peak_signal_noise_ratio(ground_truth, pred)) + '\n')
-    f.write('SSI : ' + str(metrics.structural_similarity(ground_truth, pred)) + '\n')
+    f.write('SSMI : ' + str(metrics.structural_similarity(ground_truth, pred)) + '\n')
     f.write('training time  : ' + str(training_stop - training_start) + ' seconds' + '\n')
-    f.write('Number of trainable parameters : ' + str(sum(p.numel() for p in model.parameters() if p.requires_grad))) #remove condition if you want total paramters
+    f.write('Number of trainable parameters : ' + str(sum(p.numel() for p in model.parameters() if p.requires_grad)) + '\n') #remove condition if you want total parameters
+    f.write('Max memory allocated : ' + str(torch.cuda.max_memory_allocated()) + '\n')
 
 

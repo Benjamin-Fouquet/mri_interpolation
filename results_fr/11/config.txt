@@ -1,0 +1,1 @@
+Namespace(input='data/DHCP_seg/sub-CC00060XX03_ses-12501_t2_seg.nii.gz', output='results_fr/', model=None, neurons=512, layers=5, w0=30.0, epochs=100, batch_size=400000, workers=-1, partial=False)

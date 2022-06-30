@@ -1,11 +1,7 @@
-python main.py -e 20 -p 10 -bs 4 -l True -arch Unet -nc 64 64 128 &&
-python main.py -e 20 -p 20 -bs 4 -l True -arch Unet -nc 64 64 128 &&
-python main.py -e 20 -p 30 -bs 4 -l True -arch Unet -nc 64 64 128 &&
-python main.py -e 20 -p 40 -bs 4 -l True -arch Unet -nc 64 64 128 &&
-python main.py -e 20 -p 50 -bs 4 -l True -arch Unet -nc 64 64 128 &&
-python main.py -e 20 -p 60 -bs 4 -l True -arch Unet -nc 64 64 128 &&
-python main.py -e 20 -p 70 -bs 4 -l True -arch Unet -nc 64 64 128 &&
-python main.py -e 20 -p 80 -bs 4 -l True -arch Unet -nc 64 64 128 &&
-python main.py -e 20 -p 90 -bs 4 -l True -arch Unet -nc 64 64 128 
+python siren_francois.py --partial True &&
+python siren_francois.py -i data/sub-0259_ses-0307_t2_haste_te183_ax_6.nii.gz &&
+python siren_francois.py -i data/sub-0259_ses-0307_t2_haste_te183_sag_8.nii.gz &&
+python siren_francois.py -i data/sub-0259_ses-0307_t2_haste_te183_ax_6.nii.gz -- partial True &&
+python siren_francois.py -i data/sub-0259_ses-0307_t2_haste_te183_sag_8.nii.gz -- partial True
 
 
