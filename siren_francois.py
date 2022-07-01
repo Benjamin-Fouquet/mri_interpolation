@@ -148,6 +148,7 @@ if __name__ == '__main__':
   num_workers = args.workers
   if num_workers == -1:
     num_workers = os.cpu_count()
+  device = [0] if torch.cuda.is_available() else []
 
   #Set filepath
   if os.path.isdir(output_path) is False:
@@ -192,7 +193,7 @@ if __name__ == '__main__':
 
   #Training
   net = SirenNet(dim_in=3, dim_hidden=dim_hidden, dim_out=1, num_layers=num_layers, w0=w0)
-  trainer = pl.Trainer(gpus=1, max_epochs=num_epochs)
+  trainer = pl.Trainer(gpus=device, max_epochs=num_epochs)
   training_start = int(time.time())
   trainer.fit(net, train_loader)
   training_stop = int(time.time())
