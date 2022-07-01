@@ -124,7 +124,7 @@ class SirenNet(pl.LightningModule):
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(description='Beo SIREN')
-  parser.add_argument('-i', '--input', help='Input image (nifti)', type=str, required=False, default='data/DHCP_seg/sub-CC00060XX03_ses-12501_t2_seg.nii.gz')
+  parser.add_argument('-i', '--input', help='Input image (nifti)', type=str, required=False, default='data/cor_masked.nii.gz')
   parser.add_argument('-o', '--output', help='Output image (nifti)', type=str, required=False, default='results_fr/')
   parser.add_argument('-m', '--model', help='Pytorch lightning (ckpt file) trained model', type=str, required=False)
   parser.add_argument('-n', '--neurons', help='Number of hidden neurons', type=int, required=False, default = 512)
@@ -133,7 +133,7 @@ if __name__ == '__main__':
   parser.add_argument('-e', '--epochs', help='Number of epochs', type=int, required=False, default = 100)  
   parser.add_argument('-b', '--batch_size', help='Batch size', type=int, required=False, default = 400000)    
   parser.add_argument('--workers', help='Number of workers (multiprocessing). By default: the number of CPU', type=int, required=False, default = -1)
-  parser.add_argument('--partial', type=bool, required=False, default=False)
+  parser.add_argument('--partial', type=bool, required=False, default=True)
 
   args = parser.parse_args()
 
@@ -178,21 +178,23 @@ if __name__ == '__main__':
   #Normalize intensities between [-1,1]
   # Y = (Y - torch.min(Y)) / (torch.max(Y) - torch.min(Y)) * 2 - 1
   Y = torch.reshape(Y, (-1,1))
-
-  #optional random undersampling of training data
-  if args.partial:
-    X = X[:int(len(X) / 2),:]
-    Y = Y[:int(len(Y) / 2)]
-  
+ 
   #Pytorch dataloader
   dataset = torch.utils.data.TensorDataset(X,Y)
-  loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+  percentage = 0.5
+  if args.partial:
+    train_length = int(len(dataset) * percentage)
+    val_length = int(len(dataset) - int(len(dataset) * percentage))
+    train_ds, val_ds = torch.utils.data.random_split(dataset, lengths=[train_length, val_length])
+    train_loader = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+  else:
+    train_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
   #Training
   net = SirenNet(dim_in=3, dim_hidden=dim_hidden, dim_out=1, num_layers=num_layers, w0=w0)
   trainer = pl.Trainer(gpus=1, max_epochs=num_epochs)
   training_start = int(time.time())
-  trainer.fit(net, loader)
+  trainer.fit(net, train_loader)
   training_stop = int(time.time())
 
   if args.model is not None:
