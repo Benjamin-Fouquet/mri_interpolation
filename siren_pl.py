@@ -1,369 +1,334 @@
-'''
-Current problem, lack of loss convergence:
--Input correctly normalized
--input correctly display image when reshaped
--Tried with 2048 parameters
--leanring rate ?
--test with linked pixels aka same as with the 2D image
--chagne normalization to 0-1 ? check zeronenorm
--Load image directly in tensorboard
--try square image -> nope
--2D image works ? No
--Confronted input to the notebook -> same shape
--Try outermost linear ? No, but Identity works. LazyLinear gives so so results
-Learned, pure pytorch MUCH faster, the 2D version did not renew the batch, probably problematic
--only x, Y -> same floue
--Test with cameraman dataset and original loader
--Adapt w0_inital x10 -> yes. For 2D w0_inital = ~500
--passing pints in batches instead of directly works.
--Needs to retest the trainer in 2D, with val
--retest 2D with new batch each time (tos ee if the principle works) -> yes, separating batch in two and renewing works
-TODO: adaptable learning rate
-'''
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
 
-import torch
-import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
-from torch import nn
-from siren_pytorch import SirenNet, Siren
-import pytorch_lightning as pl
-import nibabel as nib
-import numpy as np
-import skimage
+
+commands: python siren_pl.py -i 'data/DHCP_seg/sub-CC00060XX03_ses-12501_t2_seg.nii.gz' -o 'results_fr/' -b 10000 -e 1
+
+"""
+import argparse
+import math
+import os
+import time
+from os.path import expanduser
+
 import matplotlib.pyplot as plt
-from torchvision.transforms import Resize, Compose, ToTensor, Normalize
-import multiprocessing
-from typing import Tuple, Union, Dict
-from dataclasses import dataclass
-from PIL import ImageOps, Image
+import numpy as np
+import pytorch_lightning as pl
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-gpu = [0] if torch.cuda.is_available() else []
+import nibabel as nib
+from einops import rearrange
+from skimage import metrics
 
-#config overides default values
-@dataclass
-class Config:
-    #Experiment parameters
-    batch_size: int = 84100 #300000
-    epochs:int = 100
-    image_path: str = 'data/DHCP_seg/sub-CC00060XX03_ses-12501_t2_seg.nii.gz'
-    output_size: int = 290
-    mgrid_dim:int = 2
-    num_workers: int = multiprocessing.cpu_count() #here to avoid segfault when Chloe works
-    gradients_acculumation: bool = False
-    n_acc_batch: int = 10
-    # num_workers = 20
-
-    #SirenModule parameters
-    dim_in: int = 2
-    dim_hidden: int = 256
-    dim_out: int = 1
-    num_layers: int = 5
-    final_activation: torch.nn.modules.activation = None #torch.nn.Linear(in_features=1, out_features=dim_out)  #TRY: Final activation LazyLinear(out_features = dim_out)
-    w0_initial: float = 300.
-    learning_rate: float = 0.001
-
-    def export_to_txt(self, file_path: str = '') -> None:
-        with open(file_path + 'config.txt', 'w') as f:
-            for key in self.__dict__:
-                f.write(str(key) + ' : ' + str(self.__dict__[key]) + '\n')
-
-def get_mgrid(sidelen, dim=3):
-    '''Generates a grid of (x,y,...) coordinates in a range of -1 to 1.
-    sidelen: int
-    dim: int'''
-    tensors = tuple(dim * [torch.linspace(-1, 1, steps=sidelen)])
-    mgrid = torch.stack(torch.meshgrid(*tensors), dim=-1)
-    return mgrid
-
-#One siren layer
-neuron = Siren(
-    dim_in = 3,
-    dim_out = 256
-)
-
-#original pytorch model TODO: conversion to lightning module ?
-# model = SirenNet(
-#     dim_in = 3,                        # input dimension, ex. 3d coor
-#     dim_hidden = 256,                  # hidden dimension
-#     dim_out = 1,                       # output dimension, ex. intensity value
-#     num_layers = 5,                    # number of layers
-#     final_activation = nn.Sigmoid(),   # activation of final layer (nn.Identity() for direct output)
-#     w0_initial = 30.                   # different signals may require different omega_0 in the first layer - this is a hyperparameter
-# )
+home = expanduser("~")
 
 
-class SirenModule(pl.LightningModule):
-    '''
-    Lightning module from SirenNet
-    '''
+def exists(val):
+    return val is not None
+
+
+def cast_tuple(val, repeat=1):
+    return val if isinstance(val, tuple) else ((val,) * repeat)
+
+
+class Sine(nn.Module):
+    def __init__(self, w0=1.0):
+        super().__init__()
+        self.w0 = w0
+
+    def forward(self, x):
+        return torch.sin(self.w0 * x)
+
+
+# siren layer
+class Siren(nn.Module):
     def __init__(
         self,
-        dim_in: int = 3,                                                    # input dimension, ex. 3d coor
-        dim_hidden: int = 256,                                              # hidden dimension
-        dim_out: int = 1,                                                   # output dimension, ex. intensity value
-        num_layers: int = 5,                                                # number of layers
-        final_activation: torch.nn.modules.activation = None, # activation of final layer (nn.Identity() for direct output)
-        w0_initial: float = 30.,                                            # different signals may require different omega_0 in the first layer - this is a hyperparameter
-        learning_rate: float = 0.001,
-        *args,
-        **kwargs,
+        dim_in,
+        dim_out,
+        w0=1.0,
+        c=6.0,
+        is_first=False,
+        use_bias=True,
+        activation=None,
     ):
         super().__init__()
-        self.train_losses = []
-        self.val_losses = []
-        self.learning_rate = learning_rate
-        self.logging = True
+        self.dim_in = dim_in
+        self.is_first = is_first
 
-        self.model = SirenNet(
-            dim_in=dim_in,                        
-            dim_hidden=dim_hidden,                  
-            dim_out=dim_out,                       
-            num_layers=num_layers,                   
-            final_activation=final_activation,   
-            w0_initial=w0_initial,                   
-    )
+        weight = torch.zeros(dim_out, dim_in)
+        bias = torch.zeros(dim_out) if use_bias else None
+        self.init_(weight, bias, c=c, w0=w0)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x)
+        self.weight = nn.Parameter(weight)
+        self.bias = nn.Parameter(bias) if use_bias else None
+        self.activation = Sine(w0) if activation is None else activation
 
-    def loss(self, y_pred: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        return nn.functional.mse_loss(y_pred, y)
+    def init_(self, weight, bias, c, w0):
+        dim = self.dim_in
 
-    def configure_optimizers(self) -> torch.optim.Adam:
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        w_std = (1 / dim) if self.is_first else (math.sqrt(c / dim) / w0)
+        weight.uniform_(-w_std, w_std)
+
+        if exists(bias):
+            bias.uniform_(-w_std, w_std)
+
+    def forward(self, x):
+        out = F.linear(x, self.weight, self.bias)
+        out = self.activation(out)
+        return out
+
+
+# siren network
+class SirenNet(pl.LightningModule):
+    def __init__(
+        self,
+        dim_in=3,
+        dim_hidden=128,
+        dim_out=1,
+        num_layers=2,
+        w0=30.0,
+        w0_initial=30.0,
+        use_bias=True,
+        final_activation=None,
+    ):
+        super().__init__()
+        self.num_layers = num_layers
+        self.dim_hidden = dim_hidden
+        self.losses = []
+
+        self.layers = nn.ModuleList([])
+        for ind in range(num_layers):
+            is_first = ind == 0
+            layer_w0 = w0_initial if is_first else w0
+            layer_dim_in = dim_in if is_first else dim_hidden
+
+            self.layers.append(
+                Siren(
+                    dim_in=layer_dim_in,
+                    dim_out=dim_hidden,
+                    w0=layer_w0,
+                    use_bias=use_bias,
+                    is_first=is_first,
+                )
+            )
+
+        final_activation = (
+            nn.Identity() if not exists(final_activation) else final_activation
+        )
+        self.last_layer = Siren(
+            dim_in=dim_hidden,
+            dim_out=dim_out,
+            w0=w0,
+            use_bias=use_bias,
+            activation=final_activation,
+        )
+
+    def forward(self, x, mods=None):
+        mods = cast_tuple(mods, self.num_layers)
+
+        for layer, mod in zip(self.layers, mods):
+            x = layer(x)
+
+            if exists(mod):
+                x *= rearrange(mod, "d -> () d")
+
+        return self.last_layer(x)
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        z = self(x)
+
+        loss = F.mse_loss(z, y)
+        self.losses.append(loss.detach().cpu().numpy())
+
+        self.log("train_loss", loss)
+        return loss
+
+    def predict_step(self, batch, batch_idx):
+        x, y = batch
+        return self(x)
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
         return optimizer
 
-    def training_step(self, batch, batch_idx) -> float:
-        x, y = batch
-        y_pred = self.forward(x)
-        loss = self.loss(y_pred, y)
-        self.train_losses.append(loss.detach().cpu().numpy())
-        if self.logging:
-            self.log("train loss: ", loss)
-        return loss
 
-    def validation_step(self, batch, batch_idx) -> float:
-        x, y = batch
-        y_pred = self.forward(x)
-        loss = self.loss(y_pred, y)
-        self.val_losses.append(loss.detach().cpu().numpy())
-        if self.logging:
-            self.log("val loss: ", loss)
-        return loss
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Beo SIREN")
+    parser.add_argument(
+        "-i",
+        "--input",
+        help="Input image (nifti)",
+        type=str,
+        required=False,
+        default="data/cor_masked.nii.gz",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="Output image (nifti)",
+        type=str,
+        required=False,
+        default="results_fr/",
+    )
+    parser.add_argument(
+        "-m",
+        "--model",
+        help="Pytorch lightning (ckpt file) trained model",
+        type=str,
+        required=False,
+    )
+    parser.add_argument(
+        "-n",
+        "--neurons",
+        help="Number of hidden neurons",
+        type=int,
+        required=False,
+        default=512,
+    )
+    parser.add_argument(
+        "-l", "--layers", help="Number of layers", type=int, required=False, default=5
+    )
+    parser.add_argument(
+        "-w", "--w0", help="Value of w_0", type=float, required=False, default=30.0
+    )
+    parser.add_argument(
+        "-e", "--epochs", help="Number of epochs", type=int, required=False, default=100
+    )
+    parser.add_argument(
+        "-b",
+        "--batch_size",
+        help="Batch size",
+        type=int,
+        required=False,
+        default=400000,
+    )
+    parser.add_argument(
+        "--workers",
+        help="Number of workers (multiprocessing). By default: the number of CPU",
+        type=int,
+        required=False,
+        default=-1,
+    )
+    parser.add_argument("--partial", type=bool, required=False, default=True)
 
-    def test_step(self, test_batch, batch_idx):
-        pass
+    args = parser.parse_args()
 
-class Mri3DImage(Dataset):
-    def __init__(self, image_path):
-        super().__init__()
-        image = nib.load(image_path)
-        mgrid = get_mgrid(np.max(image.shape))
-        mgrid = mgrid[:,:,:image.shape[2],:]  #Break -1 1 asumption in reshape directions TODO to be converted full numpy code ? make more flexible
-        mgrid = get_mgrid(image.shape[0], dim=config.mgrid_dim) #[:,:,150]
+    dim_hidden = args.neurons
+    num_layers = args.layers
+    w0 = args.w0
+    num_epochs = args.epochs
+    model_file = args.model
+    batch_size = args.batch_size
+    image_file = args.input
+    output_path = args.output
+    num_workers = args.workers
+    if num_workers == -1:
+        num_workers = os.cpu_count()
+    device = [0] if torch.cuda.is_available() else []
 
-        #make tensor
-        pixels = torch.FloatTensor(image.get_fdata()[:,:,150])   #[:,:,150]
-        pixels = pixels.flatten()
-        pixels = (pixels - torch.min(pixels)) / (torch.max(pixels) - torch.min(pixels)) * 2 - 1
-        coords = torch.FloatTensor(mgrid)
-        coords = coords.reshape(len(pixels), config.mgrid_dim)
-        assert len(coords) == len(pixels)
-        self.coords = coords
-        self.pixels = pixels.unsqueeze(-1)
+    # Set filepath
+    if os.path.isdir(output_path) is False:
+        os.mkdir(output_path)
+    experiment_number: int = 0 if len(os.listdir(output_path)) == 0 else len(
+        os.listdir(output_path)
+    )
 
-    def __len__(self):
-        return len(self.pixels)
+    output_path = output_path + str(experiment_number) + "/"
+    if os.path.isdir(output_path) is False:
+        os.mkdir(output_path)
 
-    def __getitem__(self, idx):  
-        # if idx > 0: raise IndexError
+    # Read image
+    image = nib.load(image_file)
+    data = image.get_fdata(dtype=np.float32)
+    data = (data - np.min(data)) / (np.max(data) - np.min(data)) * 2 - 1
 
-        return self.coords[idx], self.pixels[idx]
-        # return self.coords, self.pixels
-        
-class MriDataModule(pl.LightningDataModule):
-    '''
-    Take ONE mri image and returns coords and pixels
-    '''
-    def __init__(
-        self,
-        image_path: str,
-        batch_size: int,
-        *args,
-        **kwargs
-    ):
-        super().__init__()
-        self.train_ds = None
-        self.val_ds = None
-        self.test_ds = None
-        self.image_path = image_path
-        self.batch_size = batch_size
-        dataset = Mri3DImage(image_path=image_path)
+    # Create grid
+    dim = 3
+    x = torch.linspace(-1, 1, steps=data.shape[0])
+    y = torch.linspace(-1, 1, steps=data.shape[1])
+    z = torch.linspace(-1, 1, steps=data.shape[2])
 
-        #hardcoded split
-        # self.train_ds, self.val_ds = torch.utils.data.random_split(dataset=dataset, lengths=[17000000, 72300]) 
-        # self.train_ds, self.val_ds = torch.utils.data.random_split(dataset=dataset, lengths=[80000, 4100]) 
-        
-        self.train_ds = dataset
-        self.val_ds = dataset
+    mgrid = torch.stack(torch.meshgrid(x, y, z), dim=-1)
 
-    #TODO: shuffle dataset, sampler
-    def train_dataloader(self) -> DataLoader:
-        return DataLoader(self.train_ds, batch_size=self.batch_size, num_workers=config.num_workers, shuffle=True)
+    # Convert to X=(x,y,z) and Y=intensity
+    X = torch.Tensor(mgrid.reshape(-1, dim))
+    Y = torch.Tensor(data.flatten())
 
-    def val_dataloader(self)-> DataLoader:
-        return DataLoader(self.val_ds, batch_size=self.batch_size, num_workers=config.num_workers)
+    # Normalize intensities between [-1,1]
+    # Y = (Y - torch.min(Y)) / (torch.max(Y) - torch.min(Y)) * 2 - 1
+    Y = torch.reshape(Y, (-1, 1))
 
-    def test_dataloader(self)-> DataLoader:
-        return DataLoader(self.test_ds, num_workers=config.num_workers)
+    # Pytorch dataloader
+    dataset = torch.utils.data.TensorDataset(X, Y)
+    percentage = 0.5
+    if args.partial:
+        train_length = int(len(dataset) * percentage)
+        val_length = int(len(dataset) - int(len(dataset) * percentage))
+        train_ds, val_ds = torch.utils.data.random_split(
+            dataset, lengths=[train_length, val_length]
+        )
+        train_loader = torch.utils.data.DataLoader(
+            train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers
+        )
+    else:
+        train_loader = torch.utils.data.DataLoader(
+            dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+        )
 
-    def get_dataset(self, datatype: str = 'train'):
-        if datatype == 'train':
-            return self.train_ds
-        if datatype == 'val':
-            return self.val_ds
-        if datatype == 'test':
-            return self.test_ds
+    # Training
+    net = SirenNet(
+        dim_in=3, dim_hidden=dim_hidden, dim_out=1, num_layers=num_layers, w0=w0
+    )
+    trainer = pl.Trainer(gpus=device, max_epochs=num_epochs)
+    training_start = int(time.time())
+    trainer.fit(net, train_loader)
+    training_stop = int(time.time())
 
-config = Config()
+    if args.model is not None:
+        trainer.save_checkpoint(output_path + model_file)
 
-datamodule = MriDataModule(image_path=config.image_path, batch_size=config.batch_size)
+    #%% Load trained model (just to check that loading is working) and do the prediction using lightning trainer (for batchsize management)
+    # net = SirenNet().load_from_checkpoint(model_file, dim_in=3, dim_hidden=dim_hidden, dim_out=1, num_layers=num_layers, w0 = w0)
 
-dataloader = datamodule.train_dataloader()
+    batch_size_test = batch_size * 2
+    test_loader = torch.utils.data.DataLoader(
+        dataset, batch_size=batch_size_test, num_workers=num_workers
+    )  # remove shuffling
+    yhat = torch.concat(trainer.predict(net, test_loader))
 
-# def get_cameraman_tensor(sidelength):
-#     img = Image.fromarray(skimage.data.camera())        
-#     transform = Compose([
-#         Resize(sidelength),
-#         ToTensor(),
-#         Normalize(torch.Tensor([0.5]), torch.Tensor([0.5]))
-#     ])
-#     img = transform(img)
-#     return img
+    output = yhat.cpu().detach().numpy().reshape(data.shape)
+    nib.save(nib.Nifti1Image(output, image.affine), output_path + "output.nii.gz")
 
-# def get_mgrid(sidelen, dim=2):
-#     '''Generates a flattened grid of (x,y,...) coordinates in a range of -1 to 1.
-#     sidelen: int
-#     dim: int'''
-#     tensors = tuple(dim * [torch.linspace(-1, 1, steps=sidelen)])
-#     mgrid = torch.stack(torch.meshgrid(*tensors), dim=-1)
-#     mgrid = mgrid.reshape(-1, dim)
-#     return mgrid
+    diff = data - output
+    nib.save(nib.Nifti1Image(diff, image.affine), output_path + "difference.nii.gz")
 
-# class ImageFitting(Dataset):
-#     def __init__(self, sidelength):
-#         super().__init__()
-#         img = get_cameraman_tensor(sidelength)
-#         # img = get_foetal_brain_tensor(sidelength)
-#         # img = get_astronaut_tensor(sidelength)
-#         self.pixels = img.permute(1, 2, 0).view(-1, 1)
-#         self.coords = get_mgrid(sidelength, 2)
+    lossfig = plt.plot(range(len(net.losses)), net.losses, color="r")
+    plt.savefig(output_path + "losses.png")
 
-#     def __len__(self):
-#         return 1
+    with open(output_path + "config.txt", "w") as f:
+        f.write(str(args))
 
-#     def __getitem__(self, idx):    
-#         if idx > 0: raise IndexError
-            
-#         return self.coords, self.pixels
+    with open(output_path + "scores.txt", "w") as f:
+        f.write("MSE : " + str(metrics.mean_squared_error(data, output)) + "\n")
+        f.write("PSNR : " + str(metrics.peak_signal_noise_ratio(data, output)) + "\n")
+        f.write("SSMI : " + str(metrics.structural_similarity(data, output)) + "\n")
+        f.write(
+            "training time  : "
+            + str(training_stop - training_start)
+            + " seconds"
+            + "\n"
+        )
+        f.write(
+            "Number of trainable parameters : "
+            + str(sum(p.numel() for p in net.parameters() if p.requires_grad))
+            + "\n"
+        )  # remove condition if you want total parameters
+        f.write(
+            "Max memory allocated : " + str(torch.cuda.max_memory_allocated()) + "\n"
+        )
 
-# cameraman = ImageFitting(256)
-# dataloader = DataLoader(cameraman, batch_size=1, pin_memory=True, num_workers=0)
-
-model = SirenModule(
-        dim_in=config.dim_in,
-        dim_hidden=config.dim_hidden,
-        dim_out=config.dim_out,
-        num_layers=config.num_layers,
-        final_activation=config.final_activation,
-        w0_initial=config.w0_initial,
-        learning_rate=config.learning_rate,
-) 
-
-# model = SirenNet(
-#         dim_in=config.dim_in,
-#         dim_hidden=config.dim_hidden,
-#         dim_out=config.dim_out,
-#         num_layers=config.num_layers,
-#         final_activation=config.final_activation,
-#         w0_initial=config.w0_initial,
-# ) 
-
-trainer = pl.Trainer(gpus=gpu, max_epochs=config.epochs)
-
-trainer.fit(model, train_dataloaders=datamodule.train_dataloader(), val_dataloaders=datamodule.val_dataloader())
-
-# #Manual loop
-# model.cuda()
-# optim = torch.optim.Adam(lr=config.learning_rate, params=model.parameters())
-# model_input, ground_truth = next(iter(dataloader))
-# model_input, ground_truth = model_input.cuda(), ground_truth.cuda()
-
-# if config.gradients_acculumation is False:
-#     for epoch in range(config.epochs):
-#         # model_output, coords = model(model_input)
-#         # model_input, ground_truth = next(iter(dataloader))
-#         # model_input, ground_truth = model_input.cuda(), ground_truth.cuda()    
-#         model_output = model(model_input)  
-#         loss = F.mse_loss(model_output, ground_truth)
-
-#         print("Step %d, Total loss %0.6f" % (epoch, loss))
-
-#         optim.zero_grad()
-#         loss.backward()
-#         optim.step()
-
-# if config.gradients_acculumation is True:
-#     for epoch in range(config.epochs):
-#         # model_output, coords = model(model_input)
-#         model_input, ground_truth = next(iter(dataloader))
-#         model_input, ground_truth = model_input.cuda(), ground_truth.cuda()    
-#         model_output = model(model_input)  
-#         loss_batch = F.mse_loss(model_output, ground_truth)
-#         loss += loss_batch / config.n_acc_batch
-
-#         if epoch % config.n_acc_batch == 0:
-#             print("Step %d, Total loss %0.6f" % (epoch, loss))
-
-#             optim.zero_grad()
-#             loss.backward()
-#             optim.step()
-
-#             loss = F.mse_loss(ground_truth, ground_truth) #set loss back to zero
-
-
-# model.to('cpu')
-
-#create the validation and output
-mgrid = get_mgrid(config.output_size, dim=config.mgrid_dim)
-
-#select 2D plan, reshape to tensor
-# mgrid = torch.FloatTensor(mgrid[:,:,int(mgrid.shape[-1] / 2)]).reshape(config.output_size * config.output_size , 3).unsqueeze(0)
-# mgrid = torch.FloatTensor(mgrid[:,:,150]).reshape(config.output_size * config.output_size , config.mgrid_dim).unsqueeze(0)
-mgrid = torch.FloatTensor(mgrid).reshape(config.output_size * config.output_size , config.mgrid_dim).unsqueeze(0)
-
-pred = model(mgrid)
-#reshape to image, take a 2D view
-pred = pred.squeeze(0)
-pred = pred.reshape(config.output_size, config.output_size)
-
-fig = plt.imshow(pred.detach().numpy(), cmap='gray')
-plt.savefig('sirenresult.png')
-
-version_number = str(model.logger.version)
-
-#test saves
-model = SirenModule(
-        dim_in=config.dim_in,
-        dim_hidden=config.dim_hidden,
-        dim_out=config.dim_out,
-        num_layers=config.num_layers,
-        final_activation=config.final_activation,
-        w0_initial=config.w0_initial,
-        learning_rate=config.learning_rate,
-)
-model.load_from_checkpoint(f'lightning_logs/version_{version_number}/checkpoints/epoch=0-step=8409.ckpt')
-
-trainer.fit(model, train_dataloaders=datamodule.train_dataloader(), val_dataloaders=datamodule.val_dataloader())
-# torch.save(model.state_dict(), PATH)
-# model.load_state_dict(torch.load(PATH))
