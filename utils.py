@@ -94,8 +94,8 @@ def apply_psf(tensor, kernel, image_shape):
         image = tensor.reshape(image_shape)
         image = convolve(input=image, weights=kernel, mode='nearest', cval=0)
         image = image.flatten()
+        image = image[..., None]
         tensor.data = torch.FloatTensor(image)
-        tensor.unsqueeze(-1)
     return tensor
 
 def psf_kernel(dim=2):

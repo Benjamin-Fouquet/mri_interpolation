@@ -129,7 +129,7 @@ for _ in range(config.epochs):
     x, y = next(iter(train_loader))
     y_pred = model(x)
     if config.apply_psf:
-        y_pred = apply_psf(tensor=y_pred, kernel=psf, image_shape=(290, 290))
+        y_pred = apply_psf(tensor=y_pred, kernel=psf, image_shape=(260, 311))
     loss = F.mse_loss(y_pred, y)
 
     opt.zero_grad()
