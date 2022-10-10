@@ -3,6 +3,12 @@ import torchio as tio
 import nibabel as nib
 import matplotlib.pyplot as plt
 from typing import Tuple, Union, Dict
+import torch
+# from tools import rigidMatrix
+from scipy.ndimage import map_coordinates
+import random as rd
+# from registration import commonSegment
+from scipy.ndimage import distance_transform_cdt, convolve
 
 
 def show_slices(image: Union[np.ndarray, tio.data.image.ScalarImage, nib.nifti1.Nifti1Image]) -> None:
@@ -51,3 +57,79 @@ def show(array: np.ndarray) -> None:
         plt.show()
 
     return None
+
+def tensor_visualisation(tensor):
+    """
+    Take a tensor and display a sample of it
+    """
+    assert torch.is_tensor(tensor), "Data provided is not a torch tensor"
+    tensor = tensor.detach().cpu()
+    # tensor = tensor.detach().numpy()
+    z, y, x = tensor.shape
+    fig, axes = plt.subplots(1, len(tensor))
+    for i, slice in enumerate(tensor):
+        axes[i].imshow(slice.T, origin="lower")  # cmap="gray"
+    plt.savefig("debug.png")
+
+
+def create_rn_mask(subject, percentage):
+    shape = subject.t2.shape
+    rn_mask = torch.FloatTensor(
+        np.random.choice(
+            [1, 0], size=shape, p=[(percentage * 0.01), 1 - ((percentage * 0.01))]
+        )
+    )
+    undersampling = rn_mask * subject.t2.data
+    subject.add_image(tio.LabelMap(tensor=rn_mask, affine=subject.t2.affine), "rn_mask")
+    subject.add_image(
+        tio.ScalarImage(tensor=undersampling, affine=subject.t2.affine), "rn_t2")
+
+    return None
+
+def apply_psf(tensor, kernel, image_shape):
+    '''
+    Apply precomputed convolution kernel
+    '''
+    with torch.no_grad():
+        image = tensor.reshape(image_shape)
+        image = convolve(input=image, weights=kernel, mode='nearest', cval=0)
+        image = image.flatten()
+        tensor.data = torch.FloatTensor(image)
+        tensor.unsqueeze(-1)
+    return tensor
+
+def psf_kernel(dim=2):
+    '''
+    return 5 x 5 (x 5) gaussian psf kernel
+    '''
+    n_samples = 5
+    psf_sx = np.linspace(-0.5, 0.5, n_samples)
+    psf_sy = np.linspace(-0.5, 0.5, n_samples)
+    psf_sz = np.linspace(-0.5, 0.5, n_samples)
+
+    # Define a set of points for PSF values using meshgrid
+    # https://numpy.org/doc/stable/reference/generated/numpy.meshgrid.html
+    if dim == 2:
+        psf_x, psf_y= np.meshgrid(psf_sx, psf_sy, indexing="ij")
+    if dim == 3:
+        psf_x, psf_y, psf_z = np.meshgrid(psf_sx, psf_sy, psf_sz, indexing="ij")
+
+    # Define gaussian kernel as PSF model
+    sigma = (
+        1.0 / 2.3548
+    )  # could be anisotropic to reflect MRI sequences (see Kainz et al.)
+
+    def gaussian(x, sigma):
+        return np.exp(-x * x / (2 * sigma * sigma))
+
+    if dim == 2:
+        psf = gaussian(psf_x, sigma) * gaussian(psf_y, sigma)
+        psf = psf / np.sum(psf)    
+    if dim == 3:
+        psf = gaussian(psf_x, sigma) * gaussian(psf_y, sigma) * gaussian(psf_z, sigma)
+        psf = psf / np.sum(psf)
+
+    return psf
+
+
+

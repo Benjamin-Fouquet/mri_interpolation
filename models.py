@@ -1,967 +1,232 @@
-"""
-Models
-TODO:
--Validation step in models
-DONE:
--Loggs
--losses
-"""
 
-from dataclasses import dataclass
-from typing import Tuple, Union, Dict, Any, List
-import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-import torchio as tio
-import torchvision
-from torch.utils.data import Dataset, DataLoader
-from skimage import metrics  # mean_squared_error, peak_signal_noise_ratio
-import matplotlib.pyplot as plt
-import os
+import torch.nn.functional as F
+import math
+import pytorch_lightning as pl
+from einops import rearrange
 
-def string_to_activation_layer(activation_func: str, *args, **kwargs) -> torch.nn:
-    '''
-    Simple function for reutrning a nn module from a string
-    Args:
-        activation_func (str): String describing an activation function
-    Returns:
-        activation_layer (torch.nn): Corresponding activation layer
-    TODO: leaky ReLU
+#Siren and utils#
 
-    '''
-    if activation_func == "Tanh":
-        activation_layer=nn.Tanh()
-    if activation_func == "ReLU":
-        activation_layer=nn.ReLU()
-    if activation_func == "Sig":
-        activation_layer=nn.Sigmoid()
-    return activation_layer
+def exists(val):
+    return val is not None
 
 
-class ConvModule(pl.LightningModule):
-    '''
-    Base conv module for quick prototyping, including logging and QOL
-    TODO: logging
-    '''
-    def __init__(
-        self,
-        channels: Tuple[int, ...] = [128, 128, 128],
-        input_sample: Any = None, #a batch of dataloader, None assume classic torch tensor batch, necessary for full logging
-        learning_rate: float = 0.001,
-        kernel_size: Union[int, Tuple[int, ...]] = 3,
-        activation_func: str = 'ReLU',
-        *args,
-        **kwargs, 
-    ):
+def cast_tuple(val, repeat=1):
+    return val if isinstance(val, tuple) else ((val,) * repeat)
+
+
+class Sine(nn.Module):
+    def __init__(self, w0=30.0):
         super().__init__()
-        self.train_losses = []
-        self.val_losses = []
-        self.learning_rate = learning_rate
-        self.logging = False
-        self.input_sample = input_sample
-        self.dataset_type = 'default'
-        #if torchio dataset, adapt network to accept torchio keys
-        if isinstance(self.input_sample, dict):
-            self.dataset_type = 'torchio'
-            keys = []
-            for key in input_sample:
-                keys.append(key)
-            self.x_key = keys[0]
-            self.y_key = keys[1]
-
-        #2D or 3D conv
-        if self.dataset_type == 'torchio':
-            batch_shape = self.input_sample[self.x_key]['data'].shape
-        else:
-            batch_shape = self.input_sample[0].shape if self.input_sample else [0, 0, 0, 0] #default fake batch for 2D
-        
-        if len(batch_shape) == 5:
-            if batch_shape[-1] == 1:
-                conv_layer = nn.Conv2d
-            else:
-                conv_layer = nn.Conv3d
-        elif len(batch_shape) == 4:
-            conv_layer = nn.Conv2d
-
-        #activation function
-        activation_layer = string_to_activation_layer(activation_func)
-        
-        #Build the layer system
-        layers = []
-        for idx in range(len(channels)):
-            in_channels = channels[idx - 1] if idx > 0 else 1
-            out_channels = channels[idx]
-            layer = conv_layer(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=kernel_size,
-                stride=1,
-                padding=1,
-            )
-
-            layers.append(layer)
-            layers.append(activation_layer)
-
-        last_layer = conv_layer(
-            in_channels=channels[-1],
-            out_channels=1,
-            kernel_size=kernel_size,
-            stride=1,
-            padding=1,
-        )
-        layers.append(last_layer)
-        self.model = nn.Sequential(*layers)
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x)
-
-    def loss(self, y_pred: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        return nn.functional.mse_loss(y_pred, y)
-
-    def configure_optimizers(self) -> torch.optim.Adam:
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-        return optimizer
-
-    def log_parameters(self) -> None:
-        if self.xp_parameters != None:
-            txt_log = ""
-            for key, value in enumerate(self.xp_parameters):
-                txt_log += f"{key}: {value}"
-                txt_log += "\n"
-            self.logger.experiment.add_text("Data", txt_log)
-
-        # log of image, gt and difference before converting to np
-
-        if self.dataset_type == 'torchio':
-            x, y = (
-                self.input_sample[self.x_key]['data'],
-                self.input_sample[self.x_key]['data'],
-            )
-        else:
-            x, y = (
-                self.input_sample[0]['data'],
-                self.input_sample[1]['data'],
-            )
-        if self.logging and self.input_sample != None:
-
-            y_pred = self.forward(x)
-            diff = y - y_pred
-            ground_truth_grid = torchvision.utils.make_grid(
-                y[..., int(y.shape[-1] / 2)]
-            )  # slicing around middle
-            self.logger.experiment.add_image("ground-truth", ground_truth_grid, 0)
-            pred_grid = torchvision.utils.make_grid(
-                y_pred[..., int(y.shape[-1] / 2)]
-            )  # slicing around middle
-            self.logger.experiment.add_image("prediction", pred_grid, 0)
-            diff_grid = torchvision.utils.make_grid(
-                diff[..., int(y.shape[-1] / 2)]
-            )  # slicing around middle
-            self.logger.experiment.add_image("differences", diff_grid, 0)
-
-            # detach and log metrics
-            y = y.detach().numpy().squeeze()
-            y_pred = y_pred.detach().numpy().squeeze()
-            self.log("MSE", metrics.mean_squared_error(y, y_pred))
-            self.log("PSNR", metrics.peak_signal_noise_ratio(y, y_pred))
-            self.log("SSMI", metrics.structural_similarity(y, y_pred))
-        
-        return None
-
-    def training_step(self, batch, batch_idx) -> float:
-        if self.dataset_type == 'torchio':
-            x, y = batch[self.x_key]["data"], batch[self.y_key]["data"]
-        else:
-            x, y = batch
-        #if slice dimension of batch == 1, squeeze
-        if x.shape[-1] == 1:
-            x = x.squeeze(-1)
-            y = y.squeeze(-1)
-        y_pred = self.forward(x)
-        loss = self.loss(y_pred, y)
-        self.train_losses.append(loss.detach().cpu().numpy())
-        if self.logging:
-            self.log("train loss: ", loss)
-        return loss
-
-    def validation_step(self, batch, batch_idx) -> float:
-        if self.dataset_type == 'torchio':
-            x, y = batch[self.x_key]["data"], batch[self.y_key]["data"]
-        else:
-            x, y = batch
-        #if slice dimension of batch == 1, squeeze
-        if x.shape[-1] == 1:
-            x = x.squeeze(-1)
-            y = y.squeeze(-1)
-        y_pred = self.forward(x)
-        loss = self.loss(y_pred, y)
-        self.val_losses.append(loss.detach().cpu().numpy())
-        if self.logging:
-            self.log("val loss: ", loss)
-        return loss
-
-    def test_step(self, test_batch, batch_idx):
-        pass
-
-    def on_fit_end(self) -> None:
-        os.mkdir('results' + '/' + str(self.logger.version) + '/')
-        #log losses as image TODO: add labels on legend
-        fig1 = plt.plot(range(len(self.train_losses)), self.train_losses, color='r', label='train')
-        fig2 = plt.plot(range(len(self.val_losses)), self.val_losses, color='g', label='validation') #TODO: repeat val_losses on len of train_loss ?
-        plt.savefig('results' + '/' + str(self.logger.version) + '/' + "losses.png")
-        if self.logging:
-            self.log_parameters()
-        return None
-
-###############
-# AUTOENCODER #
-###############
-class AutoEncoder(ConvModule):
-    '''
-    Classical autoencoder for encoding of images in latente space
-    '''
-    def __init__(
-        self,
-        num_channels=[16, 32, 64, 128, 256],
-        input_sample = None,
-        activation_func: str = 'ReLU',
-        xp_parameters=None,
-        logging=False,
-        lr = 0.001
-    ):
-        super().__init__()
-        self.num_channels = list(num_channels)
-        self.xp_parameters = xp_parameters
-        self.logging = logging
-        self.losses = []
-        self.dataset_type = 'default'
-        self.input_sample = input_sample
-        self.lr = lr
-        #if torchio dataset, adapt network to accept torchio keys
-        if isinstance(self.input_sample, dict):
-            self.dataset_type = 'torchio'
-            keys = []
-            for key in input_sample:
-                keys.append(key)
-            self.x_key = keys[0]
-            self.y_key = keys[1]
-
-        #2D or 3D conv
-        if self.dataset_type == 'torchio':
-            batch_shape = input_sample[self.x_key]['data'].shape
-        else:
-            batch_shape = input_sample[0].shape if input_sample else [0, 0, 0, 0] #default fake batch for 2D
-        
-        if len(batch_shape) == 5:
-            if batch_shape[-1] == 1:
-                conv_layer = nn.Conv2d
-                maxpool_layer = nn.MaxPool2d
-                upsample_layer = nn.Upsample
-            else:
-                conv_layer = nn.Conv3d
-                maxpool_layer = nn.MaxPool3d
-                upsample_layer = nn.Upsample
-        elif len(batch_shape) == 4:
-            conv_layer = nn.Conv2d
-            maxpool_layer = nn.MaxPool2d
-            upsample_layer = nn.Upsample
-
-        #activation function
-        activation_layer = string_to_activation_layer(activation_func)
-
-        layers = []
-
-        #Down layers
-        for idx in range(len(self.num_channels)):
-            in_channels = self.num_channels[idx - 1] if idx > 0 else 1
-            out_channels = self.num_channels[idx]
-            layer = conv_layer(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
-            layers.append(layer)
-            layers.append(activation_layer)
-
-            #maxpool between down layers
-            if idx < (len(self.num_channels) - 1):
-                if self.num_channels[idx] != self.num_channels[idx + 1]:
-                    layers.append(maxpool_layer(kernel_size=2)) #maxpool paramters?
-
-
-        #Up layers
-        self.num_channels.reverse()
-        for idx in range(len(self.num_channels)):
-            in_channels = self.num_channels[idx - 1] if idx > 0 else self.num_channels[idx]
-            out_channels = self.num_channels[idx]
-            layer = conv_layer(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
-            layers.append(layer)
-            layers.append(activation_layer)
-
-            #upconv between up layers
-            if idx < (len(self.num_channels) - 1):
-                if self.num_channels[idx] != self.num_channels[idx + 1]:
-                    layers.append(upsample_layer(
-                        scale_factor=2, 
-                        mode='nearest',
-                    )) 
-
-        #final layer, conv and softmax
-        last_layer = conv_layer(
-            in_channels=self.num_channels[-1],
-            out_channels=1,
-            kernel_size=3,
-            stride=1,
-            padding=1,
-        )
-        layers.append(last_layer)
-        # layers.append(nn.Softmax())*
-        self.model = nn.Sequential(*layers)
-
-#####################
-# UNET Concatenated #
-#####################
-class UnetConcatenated(ConvModule):
-    '''
-    Skip connections are concatenated in this version
-    Paper reference: https://www.nature.com/articles/s41598-020-59801-x#Sec2
-    '''
-    def __init__(
-        self,
-        num_channels=[64, 128, 256,],
-        input_sample = None,
-        activation_func: str = 'ReLU',
-        xp_parameters=None,
-        logging=False,
-        lr = 0.001
-    ):
-        super().__init__()
-        self.num_channels = list(num_channels)
-        self.xp_parameters = xp_parameters
-        self.logging = logging
-        self.losses = []
-        self.lr = lr
-        self.dataset_type = 'default'
-        self.input_sample = input_sample
-        #if torchio dataset, adapt network to accept torchio keys
-        if isinstance(self.input_sample, dict):
-            self.dataset_type = 'torchio'
-            keys = []
-            for key in input_sample:
-                keys.append(key)
-            self.x_key = keys[0]
-            self.y_key = keys[1]
-
-        #2D or 3D conv
-        if self.dataset_type == 'torchio':
-            batch_shape = input_sample[self.x_key]['data'].shape
-        else:
-            batch_shape = input_sample[0].shape if input_sample else [0, 0, 0, 0] #default fake batch for 2D
-        
-        if len(batch_shape) == 5:
-            if batch_shape[-1] == 1:
-                self.conv_layer = nn.Conv2d
-                self.maxpool_layer = nn.MaxPool2d
-                self.upsample_layer = nn.Upsample
-            else:
-                self.conv_layer = nn.Conv3d
-                self.maxpool_layer = nn.MaxPool3d
-                self.upsample_layer = nn.Upsample
-        elif len(batch_shape) == 4:
-            self.conv_layer = nn.Conv2d
-            self.maxpool_layer = nn.MaxPool2d
-            self.upsample_layer = nn.Upsample
-
-        #activation function
-        activation_layer = string_to_activation_layer(activation_func)
-
-        layers = []
-
-        #Down layers
-        for idx in range(len(self.num_channels)):
-            in_channels = self.num_channels[idx - 1] if idx > 0 else 1
-            out_channels = self.num_channels[idx]
-            layer = self.conv_layer(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
-            layers.append(layer)
-            layers.append(activation_layer)
-
-            #maxpool between down layers
-            if idx < (len(self.num_channels) - 1):
-                if self.num_channels[idx] != self.num_channels[idx + 1]:
-                    layers.append(self.maxpool_layer(kernel_size=2)) #maxpool paramters?
-
-
-        #Up layers
-        self.num_channels.reverse()
-        for idx in range(len(self.num_channels)):
-            in_channels = self.num_channels[idx - 1] if idx > 0 else self.num_channels[idx]
-            out_channels = self.num_channels[idx]
-            if in_channels > out_channels:
-                in_channels *= 1.5
-            layer = self.conv_layer(
-                in_channels=int(in_channels),
-                out_channels=out_channels,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
-            layers.append(layer)
-            layers.append(activation_layer)
-
-            #upconv between up layers
-            if idx < (len(self.num_channels) - 1):
-                if self.num_channels[idx] != self.num_channels[idx + 1]:
-                    layers.append(self.upsample_layer(
-                        scale_factor=2, 
-                        mode='nearest',
-                    )) 
-
-        #final layer, conv and softmax
-        last_layer = self.conv_layer(
-            in_channels=self.num_channels[-1],
-            out_channels=1,
-            kernel_size=3,
-            stride=1,
-            padding=1,
-        )
-        layers.append(last_layer)
-        # layers.append(nn.Softmax())
-        self.model = nn.Sequential(*layers)
+        self.w0 = w0
 
     def forward(self, x):
-        skip_connections = []
-        for i, layer  in enumerate(self.model):
-            if i == 0 or i == (len(self.model) - 1): #deal with first and last layer for out of indice
-                x = layer.forward(x)
-            else:
-                #if need save skip = if max pool comes
-                if isinstance(self.model[i + 1], self.maxpool_layer):
-                    skip_connections.append(x)
-                #if needs cat meaning if previous is upsampling
-                if isinstance(self.model[i - 1], self.upsample_layer):
-                    pop = skip_connections.pop()
-                    x = torch.cat((x, pop), 1)
-                x = layer.forward(x)
-        return x
-        
-##############
-# UNET added #
-##############
-class UnetAdded(ConvModule):
-    '''
-    Skip connections are added in this version
-    Paper reference: https://www.nature.com/articles/s41598-020-59801-x#Sec2
-    '''
+        return torch.sin(self.w0 * x)
+
+
+# siren layer
+class Siren(nn.Module):
     def __init__(
         self,
-        num_channels=[64, 128, 256,],
-        input_sample = None,
-        activation_func: str = 'ReLU',
-        xp_parameters=None,
-        logging=False,
-        lr = 0.001
+        dim_in,
+        dim_out,
+        w0=30.0,
+        c=6.0,
+        is_first=False,
+        use_bias=True,
+        activation=None,
     ):
         super().__init__()
-        self.num_channels = list(num_channels)
-        self.xp_parameters = xp_parameters
-        self.logging = logging
-        self.losses = []
-        self.lr = lr
-        self.dataset_type = 'default'
-        self.input_sample = input_sample
-        #if torchio dataset, adapt network to accept torchio keys
-        if isinstance(self.input_sample, dict):
-            self.dataset_type = 'torchio'
-            keys = []
-            for key in input_sample:
-                keys.append(key)
-            self.x_key = keys[0]
-            self.y_key = keys[1]
+        self.dim_in = dim_in
+        self.is_first = is_first
 
-        #2D or 3D conv
-        if self.dataset_type == 'torchio':
-            batch_shape = input_sample[self.x_key]['data'].shape
-        else:
-            batch_shape = input_sample[0].shape if input_sample else [0, 0, 0, 0] #default fake batch for 2D
-        
-        if len(batch_shape) == 5:
-            if batch_shape[-1] == 1:
-                self.conv_layer = nn.Conv2d
-                self.maxpool_layer = nn.MaxPool2d
-                self.upsample_layer = nn.Upsample
-            else:
-                self.conv_layer = nn.Conv3d
-                self.maxpool_layer = nn.MaxPool3d
-                self.upsample_layer = nn.Upsample
-        elif len(batch_shape) == 4:
-            self.conv_layer = nn.Conv2d
-            self.maxpool_layer = nn.MaxPool2d
-            self.upsample_layer = nn.Upsample
+        weight = torch.zeros(dim_out, dim_in)
+        bias = torch.zeros(dim_out) if use_bias else None
+        self.init_(weight, bias, c=c, w0=w0)
 
-        #activation function. 
-        activation_layer = string_to_activation_layer(activation_func)
+        self.weight = nn.Parameter(weight)
+        self.bias = nn.Parameter(bias) if use_bias else None
+        self.activation = Sine(w0) if activation is None else activation
 
-        layers = []
+    def init_(self, weight, bias, c, w0):
+        dim = self.dim_in
 
-        #Down layers
-        for idx in range(len(self.num_channels)):
-            in_channels = self.num_channels[idx - 1] if idx > 0 else 1
-            out_channels = self.num_channels[idx]
-            layer = self.conv_layer(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
-            layers.append(layer)
-            layers.append(activation_layer)
+        w_std = (1 / dim) if self.is_first else (math.sqrt(c / dim) / w0)
+        weight.uniform_(-w_std, w_std)
 
-            #maxpool between down layers
-            if idx < (len(self.num_channels) - 1):
-                if self.num_channels[idx] != self.num_channels[idx + 1]:
-                    layers.append(self.maxpool_layer(kernel_size=2)) #maxpool paramters?
-
-
-        #Up layers
-        self.num_channels.reverse()
-        for idx in range(len(self.num_channels)):
-            in_channels = self.num_channels[idx - 1] if idx > 0 else self.num_channels[idx]
-            out_channels = self.num_channels[idx]
-            layer = self.conv_layer(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
-            layers.append(layer)
-            layers.append(activation_layer)
-
-            #upconv between up layers
-            if idx < (len(self.num_channels) - 1):
-                if self.num_channels[idx] != self.num_channels[idx + 1]:
-                    layers.append(self.upsample_layer(
-                        scale_factor=2, 
-                        mode='nearest',
-                    )) 
-
-        #final layer, conv and softmax
-        last_layer = self.conv_layer(
-            in_channels=self.num_channels[-1],
-            out_channels=1,
-            kernel_size=3,
-            stride=1,
-            padding=1,
-        )
-        layers.append(last_layer)
-        # layers.append(nn.Softmax())
-        self.model = nn.Sequential(*layers)
+        if exists(bias):
+            bias.uniform_(-w_std, w_std)
 
     def forward(self, x):
-        skip_connections = []
-        for i, layer  in enumerate(self.model):
-            if i == 0 or i == (len(self.model) - 1): #deal with first and last layer for out of indice
-                x = layer.forward(x)
-            else:
-                #if need save skip = if max pool comes
-                if isinstance(self.model[i + 1], self.maxpool_layer):
-                    skip_connections.append(x)
-                #if needs cat meaning if previous is upsampling
-                if isinstance(self.model[i - 1], self.upsample_layer): #TODO test i - 1 and reformatting of pop
-                    pop = skip_connections.pop()
-                    x = x + pop
-                x = layer.forward(x)
-        return x
+        out = F.linear(x, self.weight, self.bias)
+        out = self.activation(out)
+        return out
 
 
-#LEGACY CODE
-###############
-# Autoencoder #
-###############
-class ThreeDCNN(pl.LightningModule):
+# siren network
+class SirenNet(pl.LightningModule):
     def __init__(
         self,
-        num_channels=(128, 128),
-        kernel_size=3,
-        activation_func="ReLU",
-        xp_parameters=None,
-        logging=False,
-        lr = 0.001,
-        *args,
-        **kwargs,
+        dim_in=3,
+        dim_hidden=64,
+        dim_out=1,
+        num_layers=4,
+        w0=30.0,
+        w0_initial=30.0,
+        use_bias=True,
+        final_activation=None,
     ):
         super().__init__()
-        self.num_channels = list(num_channels)
-        self.activation_func = activation_func
-        self.kernel_size = kernel_size
-        self.xp_parameters = xp_parameters
-        self.logging = logging
+        self.num_layers = num_layers
+        self.dim_hidden = dim_hidden
         self.losses = []
-        self.lr = lr
 
-        layers = []
-        for idx in range(len(num_channels)):
-            in_channels = num_channels[idx - 1] if idx > 0 else 1
-            out_channels = num_channels[idx]
-            layer = nn.Conv3d(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=kernel_size,
-                stride=1,
-                padding=1,
+        self.layers = nn.ModuleList([])
+        for ind in range(num_layers):
+            is_first = ind == 0
+            layer_w0 = w0_initial if is_first else w0
+            layer_dim_in = dim_in if is_first else dim_hidden
+
+            self.layers.append(
+                Siren(
+                    dim_in=layer_dim_in,
+                    dim_out=dim_hidden,
+                    w0=layer_w0,
+                    use_bias=use_bias,
+                    is_first=is_first,
+                )
             )
 
-            layers.append(layer)
-            if self.activation_func == "Tanh":
-                layers.append(nn.Tanh())
-            if self.activation_func == "ReLU":
-                layers.append(nn.ReLU())
-            if self.activation_func == "Sig":
-                layers.append(nn.Sigmoid())
-        last_layer = nn.Conv3d(
-            in_channels=num_channels[-1],
-            out_channels=1,
-            kernel_size=kernel_size,
-            stride=1,
-            padding=1,
+        final_activation = (
+            nn.Identity() if not exists(final_activation) else final_activation
         )
-        layers.append(last_layer)
-        self.model = nn.Sequential(*layers)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x)
-
-    def loss(self, y_pred:torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        return nn.functional.mse_loss(y_pred, y)
-
-    def configure_optimizers(self) -> torch.optim.Adam:
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
-        return optimizer
-
-    def log_parameters(self) -> None:
-        if self.xp_parameters != None:
-            txt_log = ""
-            for key, value in enumerate(self.xp_parameters):
-                txt_log += f"{key}: {value}"
-                txt_log += "\n"
-            self.logger.experiment.add_text("Data", txt_log)
-        return None
-
-    def training_step(self, batch, batch_idx) -> float:
-        #TODO: reduce coupling:: you can reduce coupling by extracting all variables and ditch ou what you don't need. Or do it at datamodule level
-        x, y = batch["rn_t2"]["data"], batch["t2"]["data"]
-        y_pred = self.forward(x)
-        loss = self.loss(y_pred, y)
-        self.losses.append(loss.detach().cpu().numpy())
-        if self.logging:
-            self.log("train loss: ", loss)
-        return loss
-
-    def validation_step(self, validation_batch, batch_idx):
-        pass
-
-    def test_step(self, test_batch, batch_idx):
-        """
-        Used for logs, does not return a tensor ! Use forward
-        Not GPU compatible at the moment
-        """
-        x, y, mask = (
-            test_batch["rn_t2"]["data"],
-            test_batch["t2"]["data"],
-            test_batch["rn_mask"]["data"],
+        self.last_layer = Siren(
+            dim_in=dim_hidden,
+            dim_out=dim_out,
+            w0=w0,
+            use_bias=use_bias,
+            activation=final_activation,
         )
-        y_pred = self.forward(x)
 
-        # log of image, gt and difference before converting to np
-        if self.logging:
-            diff = y - y_pred
-            ground_truth_grid = torchvision.utils.make_grid(
-                y[..., int(y.shape[-1] / 2)]
-            )  # slicing around middle
-            self.logger.experiment.add_image("ground-truth", ground_truth_grid, 0)
-            pred_grid = torchvision.utils.make_grid(
-                y_pred[..., int(y.shape[-1] / 2)]
-            )  # slicing around middle
-            self.logger.experiment.add_image("prediction", pred_grid, 0)
-            diff_grid = torchvision.utils.make_grid(
-                diff[..., int(y.shape[-1] / 2)]
-            )  # slicing around middle
-            self.logger.experiment.add_image("differences", diff_grid, 0)
-            mask_grid = torchvision.utils.make_grid(
-                mask[..., int(y.shape[-1] / 2)]
-            )  # slicing around middle
-            self.logger.experiment.add_image("sampling-mask", mask_grid, 0)
+    def forward(self, x, mods=None):
+        mods = cast_tuple(mods, self.num_layers)
 
-            # detach and log metrics
-            y = y.detach().numpy().squeeze()
-            y_pred = y_pred.detach().numpy().squeeze()
-            self.log("MSE", metrics.mean_squared_error(y, y_pred))
-            self.log("PSNR", metrics.peak_signal_noise_ratio(y, y_pred))
-            self.log("SSMI", metrics.structural_similarity(y, y_pred))
+        for layer, mod in zip(self.layers, mods):
+            x = layer(x)
 
-            # Add parameters
-            self.log_parameters()
-        return None
-        
-class Unet_legacy(pl.LightningModule):
-    '''
-    Skip connections are concatenated in this version
-    Paper reference: https://www.nature.com/articles/s41598-020-59801-x#Sec2
-    '''
-    def __init__(
-        self,
-        num_channels=[64, 64, 128, 128, 256, 256, 512],
-        down_activation=['ReLU'],
-        up_activation=['ReLU'],
-        xp_parameters=None,
-        logging=False,
-        lr = 0.001
-    ):
-        super().__init__()
-        self.num_channels = list(num_channels)
-        self.xp_parameters = xp_parameters
-        self.logging = logging
-        self.losses = []
-        self.lr = lr
+            if exists(mod):
+                x *= rearrange(mod, "d -> () d")
 
-        layers = []
-
-        #Down layers
-        for idx in range(len(self.num_channels)):
-            in_channels = self.num_channels[idx - 1] if idx > 0 else 1
-            out_channels = self.num_channels[idx]
-            layer = nn.Conv3d(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
-            layers.append(layer)
-            #Add activaiton layer, combinable
-            for activation in down_activation:
-                if activation == "Tanh":
-                    layers.append(nn.Tanh())
-                if activation == "ReLU":
-                    layers.append(nn.ReLU())
-                if activation == "Sig":
-                    layers.append(nn.Sigmoid())
-
-            #maxpool between down layers
-            if idx < (len(self.num_channels) - 1):
-                if self.num_channels[idx] != self.num_channels[idx + 1]:
-                    layers.append(nn.MaxPool3d(kernel_size=2)) #maxpool paramters?
-
-
-        #Up layers
-        self.num_channels.reverse()
-        for idx in range(len(self.num_channels)):
-            in_channels = self.num_channels[idx - 1] if idx > 0 else self.num_channels[idx]
-            out_channels = self.num_channels[idx]
-            if in_channels > out_channels:
-                in_channels *= 1.5
-            layer = nn.Conv3d(
-                in_channels=int(in_channels),
-                out_channels=out_channels,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
-            layers.append(layer)
-            #Add activation layer, combinable
-            for activation in up_activation:
-                if activation == "Tanh":
-                    layers.append(nn.Tanh())
-                if activation == "ReLU":
-                    layers.append(nn.ReLU())
-                if activation == "Sig":
-                    layers.append(nn.Sigmoid())
-
-            #upconv between up layers
-            if idx < (len(self.num_channels) - 1):
-                if self.num_channels[idx] != self.num_channels[idx + 1]:
-                    layers.append(nn.Upsample(
-                        scale_factor=2, 
-                        mode='nearest',
-                    )) 
-
-        #final layer, conv and softmax
-        last_layer = nn.Conv3d(
-            in_channels=self.num_channels[-1],
-            out_channels=1,
-            kernel_size=3,
-            stride=1,
-            padding=1,
-        )
-        layers.append(last_layer)
-        # layers.append(nn.Softmax())*
-        self.model = nn.Sequential(*layers)
-
-    def forward(self, x):
-        skip_connections = []
-        for i, layer  in enumerate(self.model):
-            if i == 0 or i == (len(self.model) - 1): #deal with first and last layer for out of indice
-                x = layer.forward(x)
-            else:
-                #if need save skip = if max pool comes
-                if isinstance(self.model[i + 1], nn.MaxPool3d):
-                    skip_connections.append(x)
-                #if needs cat meaning if previous is upsampling
-                if isinstance(self.model[i - 1], nn.Upsample):
-                    pop = skip_connections.pop()
-                    x = torch.cat((x, pop), 1)
-                x = layer.forward(x)
-        return x
-
-    def loss(self, y_pred, y):
-        return nn.functional.mse_loss(y_pred, y)
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
-        return optimizer
-
-    def log_parameters(self):
-        if self.xp_parameters != None:
-            txt_log = ""
-            for key, value in enumerate(self.xp_parameters):
-                txt_log += f"{key}: {value}"
-                txt_log += "\n"
-            self.logger.experiment.add_text("Data", txt_log)
-        return None
+        return self.last_layer(x)
 
     def training_step(self, batch, batch_idx):
-        #TODO: decoupling
-        x, y = batch["rn_t2"]["data"], batch["t2"]["data"]
-        y_pred = self.forward(x)
-        loss = self.loss(y_pred, y)
+        x, y = batch
+        z = self(x)
+
+        loss = F.mse_loss(z, y)
         self.losses.append(loss.detach().cpu().numpy())
-        if self.logging:
-            self.log("train loss: ", loss)
+
+        self.log("train_loss", loss)
         return loss
 
-    def validation_step(self, validation_batch, batch_idx):
-        pass
+    def predict_step(self, batch, batch_idx):
+        x, y = batch
+        return self(x)
 
-    def test_step(self, test_batch, batch_idx):
-        """
-        Used for logs, does not return a tensor ! Use forward
-        Not GPU compatible at the moment
-        TODO: decoupling
-        """
-        x, y, mask = (
-            test_batch["rn_t2"]["data"],
-            test_batch["t2"]["data"],
-            test_batch["rn_mask"]["data"],
-        )
-        y_pred = self.forward(x)
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-2)
+        return optimizer
 
-        # log of image, gt and difference before converting to np
-        if self.logging:
-            #TODO: all metrics, resize to fit ? ~most probably you will not need to as results will be crap
-            diff = y - y_pred
-            ground_truth_grid = torchvision.utils.make_grid(
-                y[..., int(y.shape[-1] / 2)]
-            )  # slicing around middle
-            self.logger.experiment.add_image("ground-truth", ground_truth_grid, 0)
-            pred_grid = torchvision.utils.make_grid(
-                y_pred[..., int(y.shape[-1] / 2)]
-            )  # slicing around middle
-            self.logger.experiment.add_image("prediction", pred_grid, 0)
-            diff_grid = torchvision.utils.make_grid(
-                diff[..., int(y.shape[-1] / 2)]
-            )  # slicing around middle
-            self.logger.experiment.add_image("differences", diff_grid, 0)
-            mask_grid = torchvision.utils.make_grid(
-                mask[..., int(y.shape[-1] / 2)]
-            )  # slicing around middle
-            self.logger.experiment.add_image("sampling-mask", mask_grid, 0)
+    def set_parameters(self, theta):
+        '''
+        Manually set parameters using matching theta, not foolproof
+        '''
+        p_dict = self.state_dict()
+        for p, thet in zip(p_dict, theta):
+            p_dict[p] = thet.data
+        self.load_state_dict(p_dict)
+        self.eval()
+        self.train() #supposed to be important when you set parameters or load state
 
-            # detach and log metrics
-            y = y.detach().numpy().squeeze()
-            y_pred = y_pred.detach().numpy().squeeze()
-            self.log("MSE", metrics.mean_squared_error(y, y_pred))
-            self.log("PSNR", metrics.peak_signal_noise_ratio(y, y_pred))
-            self.log("SSMI", metrics.structural_similarity(y, y_pred))
 
-            # Add parameters
-            self.log_parameters()
-        return None
-
-class SeparableConv2d(torch.nn.Module):
-    '''
-    source: https://gist.github.com/bdsaglam/84b1e1ba848381848ac0a308bfe0d84c
-    '''
-    def __init__(self, 
-                 in_channels,
-                 out_channels,
-                 kernel_size=3,
-                 stride=1,
-                 padding=0,
-                 dilation=1,
-                 bias=True,
-                 padding_mode='zeros',
-                 depth_multiplier=1,
-        ):
+# siren network
+class FourrierNet(pl.LightningModule):
+    def __init__(
+        self,
+        dim_in=3,
+        dim_hidden=64,
+        dim_out=1,
+        num_layers=4,
+        w0_initial=30.0,
+        use_bias=True,
+        final_activation=None,
+    ):
         super().__init__()
-        
-        intermediate_channels = in_channels * depth_multiplier
-        self.spatialConv = torch.nn.Conv2d(
-             in_channels=in_channels,
-             out_channels=intermediate_channels,
-             kernel_size=kernel_size,
-             stride=stride,
-             padding=padding,
-             dilation=dilation,
-             groups=in_channels,
-             bias=bias,
-             padding_mode=padding_mode
+        self.num_layers = num_layers
+        self.dim_hidden = dim_hidden
+        self.losses = []
+
+        self.layers = nn.ModuleList([])
+        ###
+        for ind in range(num_layers):
+            if ind == 0:
+                self.layers.append(
+                Siren(
+                    dim_in=dim_in,
+                    dim_out=dim_hidden,
+                    w0=w0_initial,
+                    use_bias=use_bias,
+                    is_first=ind,
+                )
+            )
+            else:
+                self.layers.append(nn.Linear(in_features=dim_hidden, out_features=dim_hidden))
+
+        final_activation = (
+            nn.Identity() if not exists(final_activation) else final_activation
         )
-        self.pointConv = torch.nn.Conv2d(
-             in_channels=intermediate_channels,
-             out_channels=out_channels,
-             kernel_size=1,
-             stride=1,
-             padding=0,
-             dilation=1,
-             bias=bias,
-             padding_mode=padding_mode,
+        self.last_layer = nn.Linear(
+            in_features=dim_hidden,
+            out_features=dim_out,
         )
-    
-    def forward(self, x):
-        return self.pointConv(self.spatialConv(x))
 
-#debugging
-if __name__ == "__main__":
-    #create lightweight dataloader, normat torch and torchIO
-    class LitDataset(Dataset):
-        def __init__ (self, dim=(128, 128, 128), *args, **kwargs):
-            self.x = torch.randn(dim)
-            self.y = torch.randn(dim)
-        def __len__(self):
-            return 1
-        def __getitem__(self, idx):
-            return self.x, self.y
+    def forward(self, x, mods=None):
+        mods = cast_tuple(mods, self.num_layers)
 
-    dataloader = DataLoader(dataset=LitDataset(), batch_size=1, shuffle=False)
+        for layer, mod in zip(self.layers, mods):
+            x = layer(x)
 
-    model = AutoEncoder()
-    
-    print('finished')
+            if exists(mod):
+                x *= rearrange(mod, "d -> () d")
 
+        return self.last_layer(x)
 
-    
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        z = self(x)
+
+        loss = F.mse_loss(z, y)
+        self.losses.append(loss.detach().cpu().numpy())
+
+        self.log("train_loss", loss)
+        return loss
+
+    def predict_step(self, batch, batch_idx):
+        x, y = batch
+        return self(x)
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
+        return optimizer
+
+    def set_parameters(self, theta):
+        '''
+        Manually set parameters using matching theta, not foolproof
+        '''
+        p_dict = self.state_dict()
+        for p, thet in zip(p_dict, theta):
+            p_dict[p] = thet.data
+        self.load_state_dict(p_dict)
+        self.eval()
+        self.train() #supposed to be important when you set parameters or load state

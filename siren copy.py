@@ -91,22 +91,50 @@ model_input, ground_truth = next(iter(dataloader))
 model_input, ground_truth = model_input.cuda(), ground_truth.cuda()
 losses = []
 
-for step in range(total_steps):
-    model_output = model(model_input)    
-    # loss = F.mse_loss(model_output, ground_truth)
-    loss = ((model_output - ground_truth)**2).mean()
-    losses.append(loss.detach().cpu().numpy())
-    
-    if not step % steps_til_summary:
-        print("Step %d, Total loss %0.6f" % (step, loss))
+###############
+#TRAINING LOOP#
+###############
+losses = []
+if torch.cuda.is_available():
+    model.cuda()
+optim = torch.optim.Adam(lr=config.learning_rate, params=model.parameters())
+# loss = F.mse_loss(ground_truth, ground_truth)
+training_start = int(time.time())
+if config.gradients_accumulation is False:
+    for epoch in range(config.epochs):
+        for i, data in enumerate(dataloader):
+            model_input, ground_truth = data
+            if torch.cuda.is_available():
+                model_input, ground_truth = model_input.cuda(), ground_truth.cuda()    
+            model_output = model(model_input)  
+            loss = F.mse_loss(model_output, ground_truth)
+            losses.append(loss.detach().cpu().numpy())
 
-        # fig, axes = plt.subplots(1,3, figsize=(18,6))
-        # axes[0].imshow(model_output.cpu().view(256,256).detach().numpy())
-        # plt.show()
+            print("Step %d, Total loss %0.6f" % (epoch, loss))
 
-    optim.zero_grad()
-    loss.backward()
-    optim.step()
+            optim.zero_grad()
+            loss.backward()
+            optim.step()
+
+if config.gradients_accumulation is True: #successfully in 2D
+    for epoch in range(config.epochs):
+        for i, data in enumerate(dataloader):
+            model_input, ground_truth = data
+            if torch.cuda.is_available():
+                model_input, ground_truth = model_input.cuda(), ground_truth.cuda()    
+            model_output = model(model_input)
+            loss = F.mse_loss(model_output, ground_truth) / config.n_acc_batch
+            loss.backward()
+            if epoch % config.n_acc_batch == 0:
+                print("Step %d, Total loss %0.6f" % (epoch, loss))
+                optim.step()
+                optim.zero_grad()
+                losses.append(loss.detach().cpu().numpy())
+
+training_stop = int(time.time())
+######################
+#END OF TRAINING LOOP#
+######################
 
 #create a result output vs gt
 ground_truth = ground_truth.detach().cpu().numpy()[:,:,32]

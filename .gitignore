@@ -5,3 +5,8 @@ data/
 lightning_logs/
 __pycache__/
 results_siren/
+results_fr/
+bash.sh
+bash2.sh
+
+results_fr/
