@@ -131,5 +131,23 @@ def psf_kernel(dim=2):
 
     return psf
 
+def expend_x(tensor, data):
+    '''
+    Returns expended tensor followinf PSF (5 x 5), edges are ignored to stay within the -1, 1 boundaries
+    '''
+    x = torch.linspace(-1, 1, steps=data.shape[0] * 5 - 2)
+    y = torch.linspace(-1, 1, steps=data.shape[1] * 5 - 2)
+    mgrid = torch.stack(torch.meshgrid(x,y), dim=-1)
+    coords = mgrid.reshape(int(len(x) * len(y)), 2)
+    return coords
+
+def psf_sum(y_pred, psf, data):
+    '''
+    TODO: finish psf_sum
+    '''
+    y_pred = y_pred.reshape(data.shape[0] * 5 - 2, data.shape[1] * 5 - 2)
+    y_sum = torch.zeros(data.shape[0:2])
+    
+
 
 

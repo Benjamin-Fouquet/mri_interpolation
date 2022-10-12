@@ -86,30 +86,60 @@ if __name__ == "__main__":
     # PSF coordinates in LR image
     psf_coordinates_in_LR = np.ones((4, psf.size))
 
-    # Loop over LR pixels (i,j,k)
+    # # Loop over LR pixels (i,j,k)
+    # for i in range(LRdata.shape[0]):
+    #     for j in range(LRdata.shape[1]):
+    #         for k in range(LRdata.shape[2]):
+
+    #             # coordinates of PSF box around current pixel
+    #             psf_coordinates_in_LR[0, :] = psf_x.flatten() + i
+    #             psf_coordinates_in_LR[1, :] = psf_y.flatten() + j
+    #             psf_coordinates_in_LR[2, :] = psf_z.flatten() + k
+
+    #             # Transform PSF grid to HR space
+    #             psf_coordinates_in_HR = LR_to_HR @ psf_coordinates_in_LR
+
+    #             # Get interpolated values at psf points in HR
+    #             interp_values = map_coordinates(
+    #                 HRdata,
+    #                 psf_coordinates_in_HR[0:3, :],
+    #                 order=0,
+    #                 mode="constant",
+    #                 cval=np.nan,
+    #                 prefilter=False,
+    #             )
+
+    #             # Compute new weigthed value of LR pixel
+    #             outputdata[i, j, k] = np.sum(psf.flatten() * interp_values)
+    # nibabel.save(nibabel.Nifti1Image(outputdata, LRimage.affine), args.output)
+
+
+    outputdata = np.zeros(LRdata.shape[0:2])
     for i in range(LRdata.shape[0]):
         for j in range(LRdata.shape[1]):
-            for k in range(LRdata.shape[2]):
+            # coordinates of PSF box around current pixel
+            psf_coordinates_in_LR[0, :] = psf_x.flatten() + i
+            psf_coordinates_in_LR[1, :] = psf_y.flatten() + j
 
-                # coordinates of PSF box around current pixel
-                psf_coordinates_in_LR[0, :] = psf_x.flatten() + i
-                psf_coordinates_in_LR[1, :] = psf_y.flatten() + j
-                psf_coordinates_in_LR[2, :] = psf_z.flatten() + k
+            # Transform PSF grid to HR space
+            psf_coordinates_in_HR = LR_to_HR @ psf_coordinates_in_LR
 
-                # Transform PSF grid to HR space
-                psf_coordinates_in_HR = LR_to_HR @ psf_coordinates_in_LR
+            x = torch.FloatTensor(psf_coordinates_in_HR[0:2]).T
 
-                # Get interpolated values at psf points in HR
-                interp_values = map_coordinates(
-                    HRdata,
-                    psf_coordinates_in_HR[0:3, :],
-                    order=0,
-                    mode="constant",
-                    cval=np.nan,
-                    prefilter=False,
-                )
+            interp_values = model(x)
+            interp_values = interp_values.detach().numpy()
 
-                # Compute new weigthed value of LR pixel
-                outputdata[i, j, k] = np.sum(psf.flatten() * interp_values)
+            interp_values = map_coordinates(
+                HRdata,
+                psf_coordinates_in_HR[0:3, :],
+                order=0,
+                mode="constant",
+                cval=np.nan,
+                prefilter=False,
+            )
 
-    nibabel.save(nibabel.Nifti1Image(outputdata, LRimage.affine), args.output)
+
+
+            outputdata[i, j] = np.sum(psf.flatten() * interp_values)
+
+

@@ -30,7 +30,7 @@ import datamodules
 import optimizers
 import nibabel as nib
 
-from utils import psf_kernel, apply_psf
+# from utils import psf_kernel, apply_psf, expend_x
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -94,50 +94,64 @@ datamodule.setup()
 train_loader = datamodule.train_dataloader()
 mean_train_loader = datamodule.mean_dataloader()
 
+init_data = nib.load('data/mean.nii.gz')
+
 #################
 #INITIALIZATIONS#
 #################
-psf = psf_kernel()
-model.set_parameters(theta_init)
-model.train()
-model_losses_adam_opt_mean = []
-opt = torch.optim.Adam(model.parameters(), lr=config.lr)
-for _ in range(config.epochs):
-    x, y = next(iter(mean_train_loader))
-    y_pred = model(x)
-    if config.apply_psf:
-        y_pred = apply_psf(tensor=y_pred, kernel=psf, image_shape=(290, 290))
-    loss = F.mse_loss(y_pred, y)
+# psf = psf_kernel()
+# model.set_parameters(theta_init)
+# model.train()
+# model_losses_adam_opt_mean = []
+# opt = torch.optim.Adam(model.parameters(), lr=config.lr)
+# for _ in range(config.epochs):
+#     x, y = next(iter(mean_train_loader))
+#     # #expend x with psf and reflatten
+#     # x = expend_x(x, init_data)
+#     # #predict
+#     y_pred = model(x)
+#     # #sum prediction over PSF
+#     # y_pred = psf_sum(y_pred, psf)
+#     # #compare with y
+#     loss = F.mse_loss(y_pred, y)
 
-    opt.zero_grad()
-    loss.backward()
-    opt.step()
 
-    print(f'Loss: {loss.data}')
-    model_losses_adam_opt_mean.append(loss.detach().numpy())
+#     # if config.apply_psf:
+#     #     y_pred = apply_psf(tensor=y_pred, kernel=psf, image_shape=(290, 290))
+#     # loss = F.mse_loss(y_pred, y)    
+#     opt.zero_grad()
+#     loss.backward()
+#     opt.step()
+
+#     print(f'Loss: {loss.data}')
+#     model_losses_adam_opt_mean.append(loss.detach().numpy())
 
 model_func, theta_mean = functorch.make_functional(model)
 
 ########################
 #STANDARD TRAINING LOOP#
 ########################
+training_data = nib.load(config.image_path)
 model.set_parameters(theta_mean)
 model.train()
 model_losses_adam_opt = []
 opt = torch.optim.Adam(model.parameters(), lr=config.lr)
-for _ in range(config.epochs):
-    x, y = next(iter(train_loader))
-    y_pred = model(x)
-    if config.apply_psf:
-        y_pred = apply_psf(tensor=y_pred, kernel=psf, image_shape=(260, 311))
-    loss = F.mse_loss(y_pred, y)
+trainer = pl.Trainer(gpus=[0], max_epochs=config.epochs)
+trainer.fit(model, train_loader)
 
-    opt.zero_grad()
-    loss.backward()
-    opt.step()
+# for _ in range(config.epochs):
+#     x, y = next(iter(train_loader))
+#     y_pred = model(x)
+#     # if config.apply_psf:
+#     #     y_pred = apply_psf(tensor=y_pred, kernel=psf, image_shape=(260, 311))
+#     loss = F.mse_loss(y_pred, y)
 
-    print(f'Loss: {loss.data}')
-    model_losses_adam_opt.append(loss.detach().numpy())
+#     opt.zero_grad()
+#     loss.backward()
+#     opt.step()
+
+#     print(f'Loss: {loss.data}')
+#     model_losses_adam_opt.append(loss.detach().numpy())
 
 #TODO: correct prediction for MRI
 #squeeze?
@@ -168,8 +182,8 @@ if isinstance(datamodule, datamodules.MriDataModule):
         output = pred.cpu().detach().numpy().reshape((data.shape[0], data.shape[1]))
         fig, axes = plt.subplots(1, 2)
         diff =  data - output
-        axes[0].imshow(data)
-        axes[1].imshow(output)
+        axes[0].imshow(output)
+        axes[1].imshow(data)
         fig.suptitle('Standard training')
         axes[0].set_title('Prediction')
         axes[1].set_title('Ground truth')
@@ -184,6 +198,10 @@ x, y = next(iter(mean_loader))
 y = y.detach().numpy().reshape(290, 290)
 plt.imshow(y)
 plt.show()
-        
+plt.clf()
 
+plt.plot(range(len(model_losses_adam_opt)), model_losses_adam_opt)
+plt.savefig(filepath + 'Losses_sdt_opt.png')
+
+trainer.save_checkpoint(filepath + 'checkpoint.ckpt') 
     
