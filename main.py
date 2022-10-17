@@ -1,5 +1,10 @@
 '''
 Training loops and outputs
+
+TODO:
+-3D outputs
+-Outputing losses either via tensorboard or classical matplot
+-save and load models in lightning
 '''
 
 import torch
@@ -72,6 +77,7 @@ model = models.SirenNet(
     w0_initial=config.w0_initial,
     use_bias=config.use_bias,
     final_activation=config.final_activation,
+    lr=config.lr,
 )
 
 # model = models.FourrierNet(
@@ -87,18 +93,24 @@ model = models.SirenNet(
 model_func, theta_init = functorch.make_functional(model)
 
 # datamodule = datamodules.MNISTDataModule(config=config)
-datamodule = datamodules.MriDataModule(config=config)
+# datamodule = datamodules.MriDataModule(config=config)
+datamodule = config.datamodule(config=config)
 datamodule.prepare_data()
 datamodule.setup()
 
 train_loader = datamodule.train_dataloader()
 mean_train_loader = datamodule.mean_dataloader()
-
-init_data = nib.load('data/mean.nii.gz')
+test_loader = datamodule.test_dataloader()
 
 #################
 #INITIALIZATIONS#
 #################
+# init_data = nib.load('data/mean.nii.gz')
+# model.set_parameters(theta_init)
+# model.train()
+# opt = torch.optim.Adam(model.parameters(), lr=config.lr)
+# trainer = pl.Trainer(gpus=config.device, max_epochs=config.epochs)
+# trainer.fit(model, mean_train_loader)
 # psf = psf_kernel()
 # model.set_parameters(theta_init)
 # model.train()
@@ -136,7 +148,7 @@ model.set_parameters(theta_mean)
 model.train()
 model_losses_adam_opt = []
 opt = torch.optim.Adam(model.parameters(), lr=config.lr)
-trainer = pl.Trainer(gpus=[0], max_epochs=config.epochs)
+trainer = pl.Trainer(gpus=config.device, max_epochs=config.epochs)
 trainer.fit(model, train_loader)
 
 # for _ in range(config.epochs):
@@ -156,6 +168,7 @@ trainer.fit(model, train_loader)
 #TODO: correct prediction for MRI
 #squeeze?
 
+x, y = next(iter(train_loader))
 if isinstance(datamodule, datamodules.MNISTDataModule):
     pred = model(x)
     image = pred.reshape((28, 28))
@@ -174,10 +187,12 @@ if isinstance(datamodule, datamodules.MriDataModule):
     data = image.get_fdata()
     if config.dim_in == 2:
         data = data[:,:,int(data.shape[2] / 2)]
-    pred = torch.concat(trainer.predict(model, train_loader))
+    pred = torch.concat(trainer.predict(model, test_loader))
 
     if config.dim_in == 3:
         output = pred.cpu().detach().numpy().reshape(data.shape)
+        nib.save(nib.Nifti1Image(output, affine=np.eye(4)), filepath + 'training_result.nii.gz')
+        nib.save(nib.Nifti1Image(nib.load(config.image_path).get_fdata(), affine=np.eye(4)), filepath + 'ground_truth.nii.gz')
     if config.dim_in == 2:
         output = pred.cpu().detach().numpy().reshape((data.shape[0], data.shape[1]))
         fig, axes = plt.subplots(1, 2)
@@ -193,15 +208,15 @@ if isinstance(datamodule, datamodules.MriDataModule):
         plt.imshow(diff)
         plt.savefig(filepath + 'difference.png')
 
-mean_loader = datamodule.mean_dataloader()
-x, y = next(iter(mean_loader))
-y = y.detach().numpy().reshape(290, 290)
-plt.imshow(y)
-plt.show()
-plt.clf()
+# mean_loader = datamodule.mean_dataloader()
+# x, y = next(iter(mean_loader))
+# y = y.detach().numpy().reshape(290, 290)
+# plt.imshow(y)
+# plt.show()
+# plt.clf()
 
-plt.plot(range(len(model_losses_adam_opt)), model_losses_adam_opt)
-plt.savefig(filepath + 'Losses_sdt_opt.png')
+# plt.plot(range(len(model_losses_adam_opt)), model_losses_adam_opt)
+# plt.savefig(filepath + 'Losses_sdt_opt.png')
 
-trainer.save_checkpoint(filepath + 'checkpoint.ckpt') 
+# trainer.save_checkpoint(filepath + 'checkpoint.ckpt') 
     
