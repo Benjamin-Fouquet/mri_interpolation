@@ -105,7 +105,7 @@ class MNISTDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(
-    self.dataset, batch_size=self.config.batch_size, shuffle=False, num_workers=self.config.num_workers
+    self.dataset, batch_size=self.config.batch_size, shuffle=True, num_workers=self.config.num_workers
 )
 
     def val_dataloader(self):
@@ -121,7 +121,7 @@ class MriImage(Dataset):
             image = nib.load(image_path)
         else:
             image = nib.load(config.image_path)
-        image = image.get_fdata()    #[64:192, 64:192, 100:164]
+        image = image.get_fdata(dtype=np.float32)    #[64:192, 64:192, 100:164]
         if config.dim_in == 3:
             x = torch.linspace(-1, 1, steps=image.shape[0])
             y = torch.linspace(-1, 1, steps=image.shape[1])
@@ -169,15 +169,16 @@ class MriDataModule(pl.LightningDataModule):
 
     def prepare_data(self) -> None:
         self.dataset = MriImage(config=self.config)
-        self.mean_dataset = MriImage(config=self.config, image_path='/home/benjamin/Documents/Datasets/DHCP/mean.nii.gz') #how to set mean without screwing up ?
+        self.mean_dataset = MriImage(config=self.config, image_path='data/mean.nii.gz') #how to set mean without screwing up ?
         self.train_ds = self.dataset
+        self.test_ds = self.dataset
         self.val_ds = self.dataset
         
     def setup(self, normalisation: str = 'zero centered'):
         pass
 
     def train_dataloader(self) -> DataLoader:
-        return DataLoader(self.train_ds, batch_size=self.config.batch_size, num_workers=self.config.num_workers, shuffle=False)
+        return DataLoader(self.train_ds, batch_size=self.config.batch_size, num_workers=self.config.num_workers, shuffle=True)
 
     def val_dataloader(self)-> DataLoader:
         return DataLoader(self.val_ds, batch_size=self.config.batch_size, num_workers=self.config.num_workers)
