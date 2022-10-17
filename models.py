@@ -63,7 +63,6 @@ class Siren(nn.Module):
         out = self.activation(out)
         return out
 
-
 # siren network
 class SirenNet(pl.LightningModule):
     def __init__(
@@ -76,11 +75,13 @@ class SirenNet(pl.LightningModule):
         w0_initial=30.0,
         use_bias=True,
         final_activation=None,
+        lr=1e-4
     ):
         super().__init__()
         self.num_layers = num_layers
         self.dim_hidden = dim_hidden
         self.losses = []
+        self.lr = lr
 
         self.layers = nn.ModuleList([])
         for ind in range(num_layers):
@@ -135,7 +136,7 @@ class SirenNet(pl.LightningModule):
         return self(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-2)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         return optimizer
 
     def set_parameters(self, theta):
