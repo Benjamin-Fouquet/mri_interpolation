@@ -10,3 +10,4 @@ bash.sh
 bash2.sh
 
 results_fr/
+pred_lowres.nii.gz
