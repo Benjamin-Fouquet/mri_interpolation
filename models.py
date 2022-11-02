@@ -240,13 +240,14 @@ class PsfSirenNet(SirenNet):
     psf convolution on y is done via a 1D conv layer. Atm the forward pass is modified so that the conv is done in the batch dimension, with a test. An optimisation is either to pu conv last instead of identity and
     not test each time for layer, or create a dedicated method 
     '''
-    def __init__(self, dim_in=3, dim_hidden=64, dim_out=1, num_layers=4, w0=30, w0_initial=30, use_bias=True, final_activation=None, lr=0.0001, coordinates_spacing=None):
+    def __init__(self, dim_in=3, dim_hidden=64, dim_out=1, num_layers=4, w0=30, w0_initial=30, use_bias=True, final_activation=None, lr=0.0001, coordinates_spacing=None, n_sample=5):
         super().__init__()
 
         self.num_layers = num_layers
         self.dim_hidden = dim_hidden
         self.losses = []
         self.lr = lr
+        self.n_sample = n_sample
 
         self.layers = nn.ModuleList([])
         for ind in range(num_layers):
@@ -277,20 +278,18 @@ class PsfSirenNet(SirenNet):
         self.coordinates_spacing = coordinates_spacing if not None else ValueError('No PSF spacing defined') #fall back to SirenNet?
         
         #Build psf coordinates centered around 0 
-        n_samples = 5
-        psf_sx = torch.linspace(-coordinates_spacing[0], coordinates_spacing[0], n_samples)
-        psf_sy = torch.linspace(-coordinates_spacing[1], coordinates_spacing[1], n_samples)
-        psf_sz = torch.linspace(-coordinates_spacing[2], coordinates_spacing[2], n_samples)
+        psf_sx = torch.linspace(-coordinates_spacing[0], coordinates_spacing[0], self.n_sample)
+        psf_sy = torch.linspace(-coordinates_spacing[1], coordinates_spacing[1], self.n_sample)
+        psf_sz = torch.linspace(-coordinates_spacing[2], coordinates_spacing[2], self.n_sample)
 
         # Define a set of points for PSF values using meshgrid
         # https://numpy.org/doc/stable/reference/generated/numpy.meshgrid.html
         self.psf_coordinates = torch.stack(torch.meshgrid(psf_sx, psf_sy, psf_sz), dim=-1).reshape(-1, 3) #flatten
 
         #build the psf weights
-        n_samples = 5
-        psf_sx = torch.linspace(-0.5, 0.5, n_samples)
-        psf_sy = torch.linspace(-0.5, 0.5, n_samples)
-        psf_sz = torch.linspace(-0.5, 0.5, n_samples)
+        psf_sx = torch.linspace(-0.5, 0.5, self.n_sample)
+        psf_sy = torch.linspace(-0.5, 0.5, self.n_sample)
+        psf_sz = torch.linspace(-0.5, 0.5, self.n_sample)
 
         # Define a set of points for PSF values using meshgrid
         # https://numpy.org/doc/stable/reference/generated/numpy.meshgrid.html
@@ -328,7 +327,7 @@ class PsfSirenNet(SirenNet):
         convert tensor x to the expended version following (5 x 5 x 5) PSF spread
         '''
         psf_coordinates = self.psf_coordinates.repeat(len(x), 1).to(x.device)
-        x = x.repeat_interleave(125, 0)
+        x = x.repeat_interleave(self.n_sample * self.n_sample * self.n_sample, 0)
         return x + psf_coordinates
 
     def training_step(self, batch, batch_idx):

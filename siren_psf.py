@@ -38,12 +38,13 @@ from datamodules import MNISTDataModule, MriDataModule
 @dataclass
 class Config:
     checkpoint_path = ''
-    batch_size: int = 2500 #28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 10
+    batch_size: int = 15000 #28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 50
     num_workers: int = os.cpu_count()
     # num_workers:int = 0
     device = [0] if torch.cuda.is_available() else []
     # device = []
+    accumulate_grad_batches = None
     image_path:str = 'data/t2_111.nii.gz'
     image_shape = nib.load(image_path).shape
     coordinates_spacing: np.array = np.array((2 / image_shape[0], 2 / image_shape[1], 2 / image_shape[2]))
@@ -53,6 +54,7 @@ class Config:
     dim_hidden: int = 512
     dim_out:int = 1
     num_layers:int = 5
+    n_sample:int = 3
     w0: float = 30.0
     w0_initial:float = 30.0
     use_bias: bool = True
@@ -93,7 +95,8 @@ model = models.PsfSirenNet(
     use_bias=config.use_bias,
     final_activation=config.final_activation,
     lr=config.lr,
-    coordinates_spacing=config.coordinates_spacing
+    coordinates_spacing=config.coordinates_spacing,
+    n_sample=config.n_sample
 )
 ########################
 #DATAMODULE DECLARATION#
@@ -111,12 +114,10 @@ test_loader = datamodule.test_dataloader()
 ###################
 model.train()
 opt = torch.optim.Adam(model.parameters(), lr=config.lr)
-trainer = pl.Trainer(gpus=config.device, max_epochs=config.epochs)
+trainer = pl.Trainer(gpus=config.device, max_epochs=config.epochs, accumulate_grad_batches=config.accumulate_grad_batches)
+# trainer = pl.Trainer(gpus=config.device, max_epochs=config.epochs)
 trainer.fit(model, train_loader)
 model.eval()
-
-# trainer = pl.Trainer(gpus=config.device, max_epochs=config.epochs, accumulate_grad_batches=20)
-trainer = pl.Trainer(gpus=config.device, max_epochs=config.epochs)
 
 image = nib.load(config.image_path)
 data = image.get_fdata()
