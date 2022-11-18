@@ -75,7 +75,9 @@ class SirenNet(pl.LightningModule):
         w0_initial=30.0,
         use_bias=True,
         final_activation=None,
-        lr=1e-4
+        lr=1e-4,
+        *args,
+        **kwargs
     ):
         super().__init__()
         self.num_layers = num_layers
@@ -117,7 +119,8 @@ class SirenNet(pl.LightningModule):
             x = layer(x)
 
             if exists(mod):
-                x *= rearrange(mod, "d -> () d")
+                # x *= rearrange(mod, "b d -> b () d") #From Quentin: "d -> () d" -> "b d ->b () d" allors for several batches (images) to be processed 
+                x *= mod
 
         return self.last_layer(x)
 
@@ -149,6 +152,34 @@ class SirenNet(pl.LightningModule):
         self.load_state_dict(p_dict)
         self.eval()
         self.train() #supposed to be important when you set parameters or load state
+
+class Modulator(nn.Module):
+    '''
+    Modulator as per paper 'Modulated periodic activations for generalizable local functional representations
+    '''
+    def __init__(self, dim_in, dim_hidden, num_layers):
+        super().__init__()
+        self.layers = nn.ModuleList([])
+
+        for ind in range(num_layers):
+            is_first = ind == 0
+            dim = dim_in if is_first else (dim_hidden + dim_in)
+
+            self.layers.append(nn.Sequential(
+                nn.Linear(dim, dim_hidden),
+                nn.ReLU()
+            ))
+
+    def forward(self, z):
+        x = z
+        hiddens = []
+
+        for layer in self.layers:
+            x = layer(x)
+            hiddens.append(x)
+            x = torch.cat((x, z), dim=1)
+
+        return tuple(hiddens)
 
 
 # siren network
@@ -240,7 +271,7 @@ class PsfSirenNet(SirenNet):
     psf convolution on y is done via a 1D conv layer. Atm the forward pass is modified so that the conv is done in the batch dimension, with a test. An optimisation is either to pu conv last instead of identity and
     not test each time for layer, or create a dedicated method 
     '''
-    def __init__(self, dim_in=3, dim_hidden=64, dim_out=1, num_layers=4, w0=30, w0_initial=30, use_bias=True, final_activation=None, lr=0.0001, coordinates_spacing=None, n_sample=5):
+    def __init__(self, dim_in=3, dim_hidden=64, dim_out=1, num_layers=4, w0=30, w0_initial=30, use_bias=True, final_activation=None, lr=0.0001, coordinates_spacing=None, n_sample=5, *args, **kwargs):
         super().__init__()
 
         self.num_layers = num_layers
@@ -320,7 +351,7 @@ class PsfSirenNet(SirenNet):
             if exists(mod): #TODO: could be removed for performance
                 x *= rearrange(mod, "d -> () d")
 
-        return self.last_layer(x) #conv layer requiers transpose in 
+        return self.last_layer(x)
 
     def x_to_psf_x(self, x: torch.Tensor):
         '''

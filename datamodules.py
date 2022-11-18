@@ -139,6 +139,7 @@ class MriImage(Dataset):
         pixels = pixels.flatten()
         #normalisation, should be recasted with torch reshape func
         pixels = ((pixels - torch.min(pixels)) / torch.max(pixels)) * 2 - 1
+        # pixels = ((pixels - torch.min(pixels)) / torch.max(pixels)) 
         coords = torch.FloatTensor(mgrid)
         coords = coords.reshape(len(pixels), config.dim_in)
         assert len(coords) == len(pixels)
@@ -184,7 +185,7 @@ class MriDataModule(pl.LightningDataModule):
         return DataLoader(self.val_ds, batch_size=self.config.batch_size, num_workers=self.config.num_workers)
 
     def test_dataloader(self)-> DataLoader:
-        return DataLoader(self.test_ds, batch_size=self.config.batch_size, num_workers=self.config.num_workers)
+        return DataLoader(self.test_ds, batch_size=self.config.batch_size, num_workers=self.config.num_workers, shuffle=False)
 
     def mean_dataloader(self)->DataLoader:
         return DataLoader(self.mean_dataset, batch_size=self.config.batch_size, num_workers=self.config.num_workers)
