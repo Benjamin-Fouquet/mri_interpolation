@@ -20,10 +20,20 @@ from skimage import metrics
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+import config as cg
+import datamodules
 
 #%% Code from SIREN repo modified for lightning
 import math
 from einops import rearrange
+
+config = cg.Config()
+
+datamodule = config.datamodule(config=config)
+datamodule.prepare_data()
+datamodule.setup()
+
+train_loader2 = datamodule.train_dataloader()
 
 def exists(val):
   return val is not None
@@ -195,7 +205,7 @@ if __name__ == '__main__':
   net = SirenNet(dim_in=3, dim_hidden=dim_hidden, dim_out=1, num_layers=num_layers, w0=w0)
   trainer = pl.Trainer(gpus=device, max_epochs=num_epochs)
   training_start = int(time.time())
-  trainer.fit(net, train_loader)
+  trainer.fit(net, train_loader2)
   training_stop = int(time.time())
 
   if args.model is not None:

@@ -1,10 +1,14 @@
-
+'''
+Models with classical parameter definition
+'''
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
 import pytorch_lightning as pl
 from einops import rearrange
+import tinycudann as tcnn
+import commentjson as json
 
 #Siren and utils#
 
@@ -23,7 +27,6 @@ class Sine(nn.Module):
 
     def forward(self, x):
         return torch.sin(self.w0 * x)
-
 
 # siren layer
 class Siren(nn.Module):
@@ -228,7 +231,6 @@ class FourrierNet(pl.LightningModule):
         )
 
     def forward(self, x):
-
         for layer in self.layers:
             x = layer(x)
 
@@ -376,3 +378,140 @@ class PsfSirenNet(SirenNet):
         self.log("train_loss", loss)
 
         return loss
+
+
+class ModulatedSirenNet(pl.LightningModule):
+    '''
+    TODO: verify optimizer, confront to normal modulated
+    '''
+    def __init__(
+        self,
+        dim_in=3,
+        dim_hidden=64,
+        dim_out=1,
+        num_layers=4,
+        w0=30.0,
+        w0_initial=30.0,
+        use_bias=True,
+        final_activation=None,
+        lr=1e-4,
+        *args,
+        **kwargs
+    ):
+        super().__init__()
+        self.dim_in=dim_in
+        self.dim_hidden=dim_hidden
+        self.dim_out=dim_out
+        self.num_layers = num_layers
+        self.w0 = w0
+        self.w0_initial = w0_initial
+        self.use_bias = use_bias
+        self.final_activation = final_activation
+        self.lr = lr
+        self.losses = []
+
+        #networks
+        self.modulator = Modulator(dim_in=self.dim_in, dim_hidden=self.dim_hidden, num_layers=self.num_layers)
+        self.siren = SirenNet(dim_in=self.dim_in, dim_hidden=self.dim_hidden, dim_out=self.dim_out, num_layers=self.num_layers, w0=self.w0, w0_initial=self.w0_initial, use_bias=self.use_bias, final_activation=self.final_activation, lr=self.lr)
+
+    def forward(self, x):
+        mods = self.modulator(x)
+
+        mods = cast_tuple(mods, self.num_layers) 
+
+        for layer, mod in zip(self.siren.layers, mods):
+
+            x = layer(x)
+
+            x *= mod
+
+        return self.siren.last_layer(x)
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        return optimizer
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        z = self(x)
+
+        loss = F.mse_loss(z, y)
+        self.losses.append(loss.detach().cpu().numpy())
+
+        self.log("train_loss", loss)
+        return loss
+
+    def predict_step(self, batch, batch_idx):
+        x, y = batch
+        return self(x)
+
+class HashSirenNet(pl.LightningModule):
+    '''
+    TODO: verify optimizer, confront to normal modulated
+    '''
+    def __init__(
+        self,
+        dim_in=3,
+        dim_hidden=64,
+        dim_out=1,
+        num_layers=4,
+        w0=30.0,
+        w0_initial=30.0,
+        use_bias=True,
+        final_activation=None,
+        lr=1e-4,
+        config=None,
+        *args,
+        **kwargs
+    ):
+        super().__init__()
+        self.dim_in=dim_in
+        self.dim_hidden=dim_hidden
+        self.dim_out=dim_out
+        self.num_layers = num_layers
+        self.w0 = w0
+        self.w0_initial = w0_initial
+        self.use_bias = use_bias
+        self.final_activation = final_activation
+        self.lr = lr
+        self.config = config
+        self.losses = []
+
+        #networks
+        self.encoding = tcnn.Encoding(n_input_dims=self.dim_in, encoding_config=config["encoding"], dtype=torch.float32)
+        self.modulator = Modulator(dim_in=self.config["encoding"]['n_levels'] * self.config["encoding"]['n_features_per_level'], dim_hidden=self.dim_hidden, num_layers=self.num_layers) 
+        self.siren = SirenNet(dim_in=self.dim_in, dim_hidden=self.dim_hidden, dim_out=self.dim_out, num_layers=self.num_layers, w0=self.w0, w0_initial=self.w0_initial, use_bias=self.use_bias, final_activation=self.final_activation, lr=self.lr)
+
+    def forward(self, x):
+        lat = self.encoding(x)
+        mods = self.modulator(lat)
+
+        mods = cast_tuple(mods, self.num_layers) 
+
+        for layer, mod in zip(self.siren.layers, mods):
+
+            x = layer(x)
+
+            x *= mod
+
+        return self.siren.last_layer(x)
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        return optimizer
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        z = self(x)
+
+        loss = F.mse_loss(z, y)
+        self.losses.append(loss.detach().cpu().numpy())
+
+        self.log("train_loss", loss)
+        return loss
+
+    def predict_step(self, batch, batch_idx):
+        x, y = batch
+        return self(x)
+
+

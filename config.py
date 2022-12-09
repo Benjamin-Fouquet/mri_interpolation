@@ -18,7 +18,7 @@ class Config:
     # dataset_path: str = '/home/benjamin/Documents/Datasets' #for MNIST
     dataset_path: str = 'mnt/Data/'
     # image_path: str = '/home/benjamin/Documents/Datasets/HCP/100307_T2.nii.gz'
-    image_path:str = 'data/t2_111.nii.gz'
+    image_path:str = 'data/t2_256cube.nii.gz'
     train_target: Tuple = (2,)
     test_target: Tuple = (7,)
     initialization: str = 'single'

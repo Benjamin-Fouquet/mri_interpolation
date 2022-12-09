@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 import sys
 import argparse
 import copy
-import config as cf #TODO: inelegant, replace by hydra at a point
+
 import matplotlib.pyplot as plt
 from utils import create_rn_mask
 
@@ -170,7 +170,7 @@ class MriDataModule(pl.LightningDataModule):
 
     def prepare_data(self) -> None:
         self.dataset = MriImage(config=self.config)
-        self.mean_dataset = MriImage(config=self.config, image_path='data/mean.nii.gz') #how to set mean without screwing up ?
+        # self.mean_dataset = MriImage(config=self.config, image_path='data/mean.nii.gz') #how to set mean without screwing up ?
         self.train_ds = self.dataset
         self.test_ds = self.dataset
         self.val_ds = self.dataset

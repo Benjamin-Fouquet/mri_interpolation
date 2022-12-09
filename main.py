@@ -67,27 +67,27 @@ if config.fixed_seed:
 #MODEL DECLARATION#
 ###################
 
-# model = models.SirenNet(
-#     dim_in=config.dim_in,
-#     dim_hidden=config.dim_hidden,
-#     dim_out=config.dim_out,
-#     num_layers=config.num_layers,
-#     w0=config.w0,
-#     w0_initial=config.w0_initial,
-#     use_bias=config.use_bias,
-#     final_activation=config.final_activation,
-#     lr=config.lr,
-# )
-
-model = models.FourrierNet(
+model = models.SirenNet(
     dim_in=config.dim_in,
     dim_hidden=config.dim_hidden,
     dim_out=config.dim_out,
     num_layers=config.num_layers,
+    w0=config.w0,
     w0_initial=config.w0_initial,
     use_bias=config.use_bias,
     final_activation=config.final_activation,
+    lr=config.lr,
 )
+
+# model = models.FourrierNet(
+#     dim_in=config.dim_in,
+#     dim_hidden=config.dim_hidden,
+#     dim_out=config.dim_out,
+#     num_layers=config.num_layers,
+#     w0_initial=config.w0_initial,
+#     use_bias=config.use_bias,
+#     final_activation=config.final_activation,
+# )
 
 model_func, theta_init = functorch.make_functional(model)
 

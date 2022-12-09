@@ -1,7 +1,5 @@
-python siren_francois.py --partial True &&
-python siren_francois.py -i data/sub-0259_ses-0307_t2_haste_te183_ax_6.nii.gz &&
-python siren_francois.py -i data/sub-0259_ses-0307_t2_haste_te183_sag_8.nii.gz &&
-python siren_francois.py -i data/sub-0259_ses-0307_t2_haste_te183_ax_6.nii.gz -- partial True &&
-python siren_francois.py -i data/sub-0259_ses-0307_t2_haste_te183_sag_8.nii.gz -- partial True
-
-
+python siren_psf.py --batch_size 400000 --epochs 50 --n_sample 3 --model_class SirenNet &&
+python siren_psf.py --batch_size 15000 --epochs 50 --n_sample 3 --model_class PsfSirenNet &&
+python siren_psf.py --batch_size 3000 --epochs 50 --n_sample 5 --model_class PsfSirenNet &&
+python siren_psf.py --batch_size 400000 --epochs 50 --accumulate_grad_batches 5 --n_sample 3 --model_class SirenNet &&
+python siren_psf.py --batch_size 15000 --epochs 1420 --accumulate_grad_batches 142 --n_sample 3 --model_class PsfSirenNet

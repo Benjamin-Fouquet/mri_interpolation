@@ -1,3 +1,7 @@
+'''
+Version without autoencoder
+'''
+
 import os
 import sys
 from dataclasses import dataclass, field
@@ -27,7 +31,7 @@ from datamodules import MriDataModule
 class Config:
     checkpoint_path = ''
     batch_size: int = 16777216 // 50 #28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 1
+    epochs: int = 100
     num_workers: int = os.cpu_count()
     # num_workers:int = 0
     device = [0] if torch.cuda.is_available() else []
@@ -40,9 +44,9 @@ class Config:
 
     #Network parameters
     dim_in: int = 3
-    dim_hidden: int = 128
+    dim_hidden: int = 256
     dim_out:int = 1
-    num_layers:int = 3
+    num_layers:int = 5
     n_sample:int = 3
     w0: float = 30.0
     w0_initial:float = 30.0
@@ -66,13 +70,6 @@ class Config:
 
 mri_config = Config()
 
-with open("hash_config.json") as f:
-	config = json.load(f)
-
-encoding = tcnn.Encoding(n_input_dims=3, encoding_config=config["encoding"], dtype=torch.float32)
-network = tcnn.Network(n_input_dims=encoding.n_output_dims, n_output_dims=1, network_config=config["network"]) #converts automatically to float16
-model = torch.nn.Sequential(encoding, network)
-
 ########################
 #DATAMODULE DECLARATION#
 ########################
@@ -84,21 +81,16 @@ train_loader = datamodule.train_dataloader()
 # mean_train_loader = datamodule.mean_dataloader()
 test_loader = datamodule.test_dataloader()
 
-
-
-modulator = Modulator(dim_in=config["encoding"]['n_levels'] * config["encoding"]['n_features_per_level'], dim_hidden=mri_config.dim_hidden, num_layers=mri_config.num_layers) #dim_hidden is dim 1 from latent ?
+modulator = Modulator(dim_in=3, dim_hidden=256, num_layers=mri_config.num_layers) #dim_hidden is dim 1 from latent ?
 
 siren=SirenNet(dim_in=3, dim_hidden=mri_config.dim_hidden, dim_out=1, num_layers=4)
 
-model = torch.nn.Sequential(encoding, modulator, siren)
+model = torch.nn.Sequential(modulator, siren)
 optimizer = torch.optim.Adam(params=model.parameters(), lr=mri_config.lr)
-siren.to('cuda')
-modulator.to('cuda')
+model.to('cuda')
 
 #manual training loop
 losses = []
-enc_parameters = []
-
 for epoch in range(mri_config.epochs):
 
   # TRAINING LOOP
@@ -107,11 +99,8 @@ for epoch in range(mri_config.epochs):
     x = x.to('cuda')
     y = y.to('cuda')
 
-    # y_pred = model(x).float()
-
     #x to hash
-    lat = encoding(x)
-    mod_lat = modulator(lat)
+    mod_lat = modulator(x)
     y_pred = siren(x, mod_lat)
     #hash(x) to modulator
     #x and mod to siren
@@ -120,9 +109,9 @@ for epoch in range(mri_config.epochs):
     print(f'epoch: {epoch}')
     print('train loss: ', loss.item())
     losses.append(loss.detach().cpu().numpy())
-    enc_parameters.append(encoding.params.clone().detach())
 
     loss.backward()
+
     optimizer.step()
     optimizer.zero_grad()
 
@@ -141,18 +130,17 @@ for batch in loader:
 
     x = x.to('cuda')
 
-    lat = encoding(x)
-    mod_lat = modulator(lat)
+    mod_lat = modulator(x)
     pred = torch.cat((pred, siren(x, mod_lat).detach().cpu()))
 
 pred = pred[1:, :].numpy()
 
 pred = pred.reshape(256, 256, 256)
 
-nib.save(nib.Nifti1Image(pred, np.eye(4)), 'out_hashsiren_highres.nii.gz')
+nib.save(nib.Nifti1Image(pred, np.eye(4)), 'out_modsiren_highres.nii.gz')
 
 plt.plot(range(len(losses)), losses)
-plt.savefig('losses_hashsiren.png')
+plt.savefig('losses_modsiren.png')
 
 # modulator = Modulator(dim_in=encoding_config['n_levels'] * encoding_config['n_features_per_level'], dim_hidden=dim_hidden, num_layers=num_layers)
 
