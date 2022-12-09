@@ -8,6 +8,9 @@ results_siren/
 results_fr/
 bash.sh
 bash2.sh
+outputs
+mnt/
+data/
 
 results_fr/
 pred_lowres.nii.gz
