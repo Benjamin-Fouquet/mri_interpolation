@@ -11,7 +11,7 @@ from scipy.ndimage import map_coordinates
 # We use ITK resampling because it's a simple way to obtain the new pixel coordinates of LR image
 # Otherwise, we have to compute new coordinates depending on image resolutions (HR and LR)
 
-#python -i psf_françois.py -r t2_111.nii.gz -i t2_113.nii.gz -o out.nii.gz
+# python -i psf_françois.py -r t2_111.nii.gz -i t2_113.nii.gz -o out.nii.gz
 
 if __name__ == "__main__":
 
@@ -113,7 +113,6 @@ if __name__ == "__main__":
                 outputdata[i, j, k] = np.sum(psf.flatten() * interp_values)
     nibabel.save(nibabel.Nifti1Image(outputdata, LRimage.affine), args.output)
 
-
     # outputdata = np.zeros(LRdata.shape[0:2])
     # for i in range(LRdata.shape[0]):
     #     for j in range(LRdata.shape[1]):
@@ -139,5 +138,3 @@ if __name__ == "__main__":
     #         )
 
     #         outputdata[i, j] = np.sum(psf.flatten() * interp_values)
-
-

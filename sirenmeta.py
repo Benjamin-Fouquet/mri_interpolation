@@ -1,21 +1,19 @@
+import math
+import os
+from typing import Dict, Tuple, Union
 
-import torch
-from torch import nn
-from torch.nn import functional as F
-
+import functorch
+import matplotlib.pyplot as plt
 # import pytorch_lightning as pl
 import numpy as np
-import matplotlib.pyplot as plt
-import functorch
-from torch.autograd import Variable
-
-import math
-from einops import rearrange
 import pytorch_lightning as pl
-import torchvision
-import os
-from typing import Tuple, Union, Dict
+import torch
+from torch import nn
+from torch.autograd import Variable
+from torch.nn import functional as F
 
+import torchvision
+from einops import rearrange
 
 batch_size = 784
 max_iter = 5
@@ -25,6 +23,7 @@ num_workers = os.cpu_count()
 device = [0] if torch.cuda.is_available() else []
 
 torch.random.manual_seed(0)
+
 
 def exists(val):
     return val is not None
@@ -157,14 +156,14 @@ class SirenNet(pl.LightningModule):
         return optimizer
 
     def set_parameters(self, theta):
-        '''
+        """
         Manually set parameters using matching theta, no foolproof
-        '''
+        """
         p_dict = self.state_dict()
         for p, thet in zip(p_dict, theta):
             p_dict[p] = thet.data
         self.load_state_dict(p_dict)
-         
+
 
 class Optimizer(nn.Module):
     """
@@ -180,7 +179,7 @@ class Optimizer(nn.Module):
             num_layers=num_layers,
         )
         # self.lstm = nn.LSTM(input_size=2 * input_size, hidden_size=hidden_size, num_layers=num_layers)
-        self.output = nn.Linear(hidden_size, np.prod(input_shape)) #
+        self.output = nn.Linear(hidden_size, np.prod(input_shape))  #
         # self.output = nn.Identity()
         self.input_shape = input_shape
         # cell and hidden states are attributes of the class in this example
@@ -190,7 +189,9 @@ class Optimizer(nn.Module):
         self.register_buffer(
             "hidden_state", torch.randn(num_layers, hidden_size), persistent=True
         )
-        self.preproc = preproc  # WIP: preprocessing as discussed in the annex of "learning to learn by gradient descent by gradient descent"
+        self.preproc = (
+            preproc
+        )  # WIP: preprocessing as discussed in the annex of "learning to learn by gradient descent by gradient descent"
         self.preproc_factor = 10.0
         self.preproc_threshold = np.exp(-self.preproc_factor)
 
@@ -277,7 +278,7 @@ for _ in range(epochs2):
     loss.backward()
     opt.step()
 
-    print(f'Loss: {loss.data}')
+    print(f"Loss: {loss.data}")
     model_losses_adam_opt.append(loss.detach().numpy())
 
 # # Classical training test :: Test purpose
@@ -295,7 +296,7 @@ for _ in range(epochs2):
 # axes[1].imshow(digit_tensor.detach().numpy())
 # plt.show()
 
-#TODO: reinstance of the model does not yield exact same training results even with fixed seed, maybe need to do it externally and reset parameters each time
+# TODO: reinstance of the model does not yield exact same training results even with fixed seed, maybe need to do it externally and reset parameters each time
 model = SirenNet(
     dim_in=2,
     dim_hidden=16,
@@ -354,7 +355,7 @@ for epoch in range(epochs):
     outer_loss.backward()
     opt.step()
 
-    print(f'outer loss: {outer_loss.data}, model_loss: {model_loss.data}')
+    print(f"outer loss: {outer_loss.data}, model_loss: {model_loss.data}")
 
 model = SirenNet(
     dim_in=2,
@@ -369,7 +370,7 @@ model = SirenNet(
 model.set_parameters(theta)
 opt = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-#replaced with fit ?
+# replaced with fit ?
 for _ in range(epochs2):
     x, y = next(iter(train_loader))
     y_pred = model(x)
@@ -379,7 +380,7 @@ for _ in range(epochs2):
     loss.backward()
     opt.step()
 
-    print(f'Loss: {loss.data}')
+    print(f"Loss: {loss.data}")
     log_model_losses.append(loss.detach().numpy())
 
 
@@ -390,7 +391,7 @@ for _ in range(epochs2):
 # axes[1].imshow(digit_tensor.detach().numpy())
 # plt.show()
 
-#Transfert learning ?
+# Transfert learning ?
 digit = mnist_dataset[5]  # a PIL image
 digit_tensor = torchvision.transforms.ToTensor()(digit[0]).squeeze()
 digit_tensor = digit_tensor * 2 - 1
@@ -425,7 +426,7 @@ for _ in range(epochs2):
     loss.backward()
     opt.step()
 
-    print(f'Loss: {loss.data}')
+    print(f"Loss: {loss.data}")
     transfert_losses.append(loss.detach().numpy())
 
 

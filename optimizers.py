@@ -1,27 +1,28 @@
-'''
+"""
 Training loops and outputs
-'''
+"""
 
-import torch
-from torch import nn
-from torch.nn import functional as F
-from typing import Tuple, Union, Dict
-
-# import pytorch_lightning as pl
-import numpy as np
-import matplotlib.pyplot as plt
-# import functorch
-from torch.autograd import Variable
-
-import math
-from einops import rearrange
-import pytorch_lightning as pl
-import torchvision
-import os
-from dataclasses import dataclass, field
-import sys
 import argparse
 import copy
+import math
+import os
+import sys
+from dataclasses import dataclass, field
+from typing import Dict, Tuple, Union
+
+import matplotlib.pyplot as plt
+# import pytorch_lightning as pl
+import numpy as np
+import pytorch_lightning as pl
+import torch
+from torch import nn
+# import functorch
+from torch.autograd import Variable
+from torch.nn import functional as F
+
+import torchvision
+from einops import rearrange
+
 
 class Optimizer(nn.Module):
     """
@@ -37,7 +38,7 @@ class Optimizer(nn.Module):
             num_layers=num_layers,
         )
         # self.lstm = nn.LSTM(input_size=2 * input_size, hidden_size=hidden_size, num_layers=num_layers)
-        self.output = nn.Linear(hidden_size, np.prod(input_shape)) #
+        self.output = nn.Linear(hidden_size, np.prod(input_shape))  #
         # self.output = nn.Identity()
         self.input_shape = input_shape
         # cell and hidden states are attributes of the class in this example
@@ -47,7 +48,9 @@ class Optimizer(nn.Module):
         self.register_buffer(
             "hidden_state", torch.randn(num_layers, hidden_size), persistent=True
         )
-        self.preproc = preproc  # WIP: preprocessing as discussed in the annex of "learning to learn by gradient descent by gradient descent"
+        self.preproc = (
+            preproc
+        )  # WIP: preprocessing as discussed in the annex of "learning to learn by gradient descent by gradient descent"
         self.preproc_factor = 10.0
         self.preproc_threshold = np.exp(-self.preproc_factor)
 
@@ -91,14 +94,16 @@ class Optimizer(nn.Module):
 
         return self.output(out).reshape(self.input_shape)
 
+
 class ConvOptimizer(nn.Module):
 
-    '''
+    """
     Marche que pour couche du centre, only 2D si tu fais une conv par couche, essayer full stack parameters ?
-    '''
-    def __init__(self, input, channels=[32, 32, 32], activation_func=None)->None:
+    """
+
+    def __init__(self, input, channels=[32, 32, 32], activation_func=None) -> None:
         super().__init__()
-        #Build the layer system
+        # Build the layer system
         conv_layer = nn.Conv2d
         layers = []
         for idx in range(len(channels)):
@@ -117,18 +122,12 @@ class ConvOptimizer(nn.Module):
                 layers.append(activation_func)
 
         last_layer = conv_layer(
-            in_channels=channels[-1],
-            out_channels=1,
-            kernel_size=3,
-            stride=1,
-            padding=1,
+            in_channels=channels[-1], out_channels=1, kernel_size=3, stride=1, padding=1
         )
         layers.append(last_layer)
         self.model = nn.Sequential(*layers)
 
-    def reset_state(
-        self,
-    ):  
+    def reset_state(self,):
         pass
         # for parameter in self.parameters():
         #     parameter.data = torch.randn(parameter.shape) * 0.01

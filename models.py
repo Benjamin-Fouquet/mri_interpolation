@@ -1,16 +1,19 @@
-'''
+"""
 Models with classical parameter definition
-'''
+"""
+import math
+
+import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-import pytorch_lightning as pl
-from einops import rearrange
-import tinycudann as tcnn
-import commentjson as json
 
-#Siren and utils#
+import commentjson as json
+import tinycudann as tcnn
+from einops import rearrange
+
+# Siren and utils#
+
 
 def exists(val):
     return val is not None
@@ -27,6 +30,7 @@ class Sine(nn.Module):
 
     def forward(self, x):
         return torch.sin(self.w0 * x)
+
 
 # siren layer
 class Siren(nn.Module):
@@ -65,6 +69,7 @@ class Siren(nn.Module):
         out = F.linear(x, self.weight, self.bias)
         out = self.activation(out)
         return out
+
 
 # siren network
 class SirenNet(pl.LightningModule):
@@ -122,7 +127,7 @@ class SirenNet(pl.LightningModule):
             x = layer(x)
 
             if exists(mod):
-                # x *= rearrange(mod, "b d -> b () d") #From Quentin: "d -> () d" -> "b d ->b () d" allors for several batches (images) to be processed 
+                # x *= rearrange(mod, "b d -> b () d") #From Quentin: "d -> () d" -> "b d ->b () d" allors for several batches (images) to be processed
                 x *= mod
 
         return self.last_layer(x)
@@ -146,20 +151,22 @@ class SirenNet(pl.LightningModule):
         return optimizer
 
     def set_parameters(self, theta):
-        '''
+        """
         Manually set parameters using matching theta, not foolproof
-        '''
+        """
         p_dict = self.state_dict()
         for p, thet in zip(p_dict, theta):
             p_dict[p] = thet.data
         self.load_state_dict(p_dict)
         self.eval()
-        self.train() #supposed to be important when you set parameters or load state
+        self.train()  # supposed to be important when you set parameters or load state
+
 
 class Modulator(nn.Module):
-    '''
+    """
     Modulator as per paper 'Modulated periodic activations for generalizable local functional representations
-    '''
+    """
+
     def __init__(self, dim_in, dim_hidden, num_layers):
         super().__init__()
         self.layers = nn.ModuleList([])
@@ -168,10 +175,7 @@ class Modulator(nn.Module):
             is_first = ind == 0
             dim = dim_in if is_first else (dim_hidden + dim_in)
 
-            self.layers.append(nn.Sequential(
-                nn.Linear(dim, dim_hidden),
-                nn.ReLU()
-            ))
+            self.layers.append(nn.Sequential(nn.Linear(dim, dim_hidden), nn.ReLU()))
 
     def forward(self, z):
         x = z
@@ -187,9 +191,10 @@ class Modulator(nn.Module):
 
 # siren network
 class FourrierNet(pl.LightningModule):
-    '''
+    """
     Tested several activation func after linear layers -> crap
-    '''
+    """
+
     def __init__(
         self,
         dim_in=3,
@@ -210,25 +215,24 @@ class FourrierNet(pl.LightningModule):
         for ind in range(num_layers):
             if ind == 0:
                 self.layers.append(
-                Siren(
-                    dim_in=dim_in,
-                    dim_out=dim_hidden,
-                    w0=w0_initial,
-                    use_bias=use_bias,
-                    is_first=ind,
+                    Siren(
+                        dim_in=dim_in,
+                        dim_out=dim_hidden,
+                        w0=w0_initial,
+                        use_bias=use_bias,
+                        is_first=ind,
+                    )
                 )
-            )
             else:
-                self.layers.append(nn.Linear(in_features=dim_hidden, out_features=dim_hidden))
+                self.layers.append(
+                    nn.Linear(in_features=dim_hidden, out_features=dim_hidden)
+                )
                 self.layers.append(nn.Tanh())
 
         final_activation = (
             nn.Identity() if not exists(final_activation) else final_activation
         )
-        self.last_layer = nn.Linear(
-            in_features=dim_hidden,
-            out_features=dim_out,
-        )
+        self.last_layer = nn.Linear(in_features=dim_hidden, out_features=dim_out)
 
     def forward(self, x):
         for layer in self.layers:
@@ -255,25 +259,41 @@ class FourrierNet(pl.LightningModule):
         return optimizer
 
     def set_parameters(self, theta):
-        '''
+        """
         Manually set parameters using matching theta, not foolproof
-        '''
+        """
         p_dict = self.state_dict()
         for p, thet in zip(p_dict, theta):
             p_dict[p] = thet.data
         self.load_state_dict(p_dict)
         self.eval()
-        self.train() #supposed to be important when you set parameters or load state
+        self.train()  # supposed to be important when you set parameters or load state
 
 
 class PsfSirenNet(SirenNet):
-    '''
+    """
     Psf Siren. 
     x is expanded at each step via x_to_psf_x. Optimisation can be done by including most calculation in the init
     psf convolution on y is done via a 1D conv layer. Atm the forward pass is modified so that the conv is done in the batch dimension, with a test. An optimisation is either to pu conv last instead of identity and
     not test each time for layer, or create a dedicated method 
-    '''
-    def __init__(self, dim_in=3, dim_hidden=64, dim_out=1, num_layers=4, w0=30, w0_initial=30, use_bias=True, final_activation=None, lr=0.0001, coordinates_spacing=None, n_sample=5, *args, **kwargs):
+    """
+
+    def __init__(
+        self,
+        dim_in=3,
+        dim_hidden=64,
+        dim_out=1,
+        num_layers=4,
+        w0=30,
+        w0_initial=30,
+        use_bias=True,
+        final_activation=None,
+        lr=0.0001,
+        coordinates_spacing=None,
+        n_sample=5,
+        *args,
+        **kwargs
+    ):
         super().__init__()
 
         self.num_layers = num_layers
@@ -308,18 +328,30 @@ class PsfSirenNet(SirenNet):
             use_bias=use_bias,
             activation=final_activation,
         )
-        self.coordinates_spacing = coordinates_spacing if not None else ValueError('No PSF spacing defined') #fall back to SirenNet?
-        
-        #Build psf coordinates centered around 0 
-        psf_sx = torch.linspace(-coordinates_spacing[0], coordinates_spacing[0], self.n_sample)
-        psf_sy = torch.linspace(-coordinates_spacing[1], coordinates_spacing[1], self.n_sample)
-        psf_sz = torch.linspace(-coordinates_spacing[2], coordinates_spacing[2], self.n_sample)
+        self.coordinates_spacing = (
+            coordinates_spacing if not None else ValueError("No PSF spacing defined")
+        )  # fall back to SirenNet?
+
+        # Build psf coordinates centered around 0
+        psf_sx = torch.linspace(
+            -coordinates_spacing[0], coordinates_spacing[0], self.n_sample
+        )
+        psf_sy = torch.linspace(
+            -coordinates_spacing[1], coordinates_spacing[1], self.n_sample
+        )
+        psf_sz = torch.linspace(
+            -coordinates_spacing[2], coordinates_spacing[2], self.n_sample
+        )
 
         # Define a set of points for PSF values using meshgrid
         # https://numpy.org/doc/stable/reference/generated/numpy.meshgrid.html
-        self.psf_coordinates = torch.stack(torch.meshgrid(psf_sx, psf_sy, psf_sz), dim=-1).reshape(-1, 3) #flatten
+        self.psf_coordinates = torch.stack(
+            torch.meshgrid(psf_sx, psf_sy, psf_sz), dim=-1
+        ).reshape(
+            -1, 3
+        )  # flatten
 
-        #build the psf weights
+        # build the psf weights
         psf_sx = torch.linspace(-0.5, 0.5, self.n_sample)
         psf_sy = torch.linspace(-0.5, 0.5, self.n_sample)
         psf_sz = torch.linspace(-0.5, 0.5, self.n_sample)
@@ -339,33 +371,44 @@ class PsfSirenNet(SirenNet):
         psf = gaussian(psf_x, sigma) * gaussian(psf_y, sigma) * gaussian(psf_z, sigma)
         psf = psf / torch.sum(psf)
         psf = psf.flatten()
-        psf_conv = nn.Conv1d(in_channels=1, out_channels=1, kernel_size=len(psf), stride=len(psf), padding=0, bias=False)
-        psf_conv.weight = nn.Parameter(psf.unsqueeze(0).unsqueeze(0), requires_grad=False)
+        psf_conv = nn.Conv1d(
+            in_channels=1,
+            out_channels=1,
+            kernel_size=len(psf),
+            stride=len(psf),
+            padding=0,
+            bias=False,
+        )
+        psf_conv.weight = nn.Parameter(
+            psf.unsqueeze(0).unsqueeze(0), requires_grad=False
+        )
         self.psf_conv = psf_conv
 
     def forward(self, x, mods=None):
-        mods = cast_tuple(mods, self.num_layers) #+1 to account for the conv layer at the end
+        mods = cast_tuple(
+            mods, self.num_layers
+        )  # +1 to account for the conv layer at the end
 
         for layer, mod in zip(self.layers, mods):
 
             x = layer(x)
 
-            if exists(mod): #TODO: could be removed for performance
+            if exists(mod):  # TODO: could be removed for performance
                 x *= rearrange(mod, "d -> () d")
 
         return self.last_layer(x)
 
     def x_to_psf_x(self, x: torch.Tensor):
-        '''
+        """
         convert tensor x to the expended version following (5 x 5 x 5) PSF spread
-        '''
+        """
         psf_coordinates = self.psf_coordinates.repeat(len(x), 1).to(x.device)
         x = x.repeat_interleave(self.n_sample * self.n_sample * self.n_sample, 0)
         return x + psf_coordinates
 
     def training_step(self, batch, batch_idx):
         x, y = batch
-        #create psf around x
+        # create psf around x
         x = self.x_to_psf_x(x)
 
         z = self(x)
@@ -381,9 +424,10 @@ class PsfSirenNet(SirenNet):
 
 
 class ModulatedSirenNet(pl.LightningModule):
-    '''
+    """
     TODO: verify optimizer, confront to normal modulated
-    '''
+    """
+
     def __init__(
         self,
         dim_in=3,
@@ -399,9 +443,9 @@ class ModulatedSirenNet(pl.LightningModule):
         **kwargs
     ):
         super().__init__()
-        self.dim_in=dim_in
-        self.dim_hidden=dim_hidden
-        self.dim_out=dim_out
+        self.dim_in = dim_in
+        self.dim_hidden = dim_hidden
+        self.dim_out = dim_out
         self.num_layers = num_layers
         self.w0 = w0
         self.w0_initial = w0_initial
@@ -410,14 +454,26 @@ class ModulatedSirenNet(pl.LightningModule):
         self.lr = lr
         self.losses = []
 
-        #networks
-        self.modulator = Modulator(dim_in=self.dim_in, dim_hidden=self.dim_hidden, num_layers=self.num_layers)
-        self.siren = SirenNet(dim_in=self.dim_in, dim_hidden=self.dim_hidden, dim_out=self.dim_out, num_layers=self.num_layers, w0=self.w0, w0_initial=self.w0_initial, use_bias=self.use_bias, final_activation=self.final_activation, lr=self.lr)
+        # networks
+        self.modulator = Modulator(
+            dim_in=self.dim_in, dim_hidden=self.dim_hidden, num_layers=self.num_layers
+        )
+        self.siren = SirenNet(
+            dim_in=self.dim_in,
+            dim_hidden=self.dim_hidden,
+            dim_out=self.dim_out,
+            num_layers=self.num_layers,
+            w0=self.w0,
+            w0_initial=self.w0_initial,
+            use_bias=self.use_bias,
+            final_activation=self.final_activation,
+            lr=self.lr,
+        )
 
     def forward(self, x):
         mods = self.modulator(x)
 
-        mods = cast_tuple(mods, self.num_layers) 
+        mods = cast_tuple(mods, self.num_layers)
 
         for layer, mod in zip(self.siren.layers, mods):
 
@@ -445,10 +501,12 @@ class ModulatedSirenNet(pl.LightningModule):
         x, y = batch
         return self(x)
 
+
 class HashSirenNet(pl.LightningModule):
-    '''
+    """
     TODO: verify optimizer, confront to normal modulated
-    '''
+    """
+
     def __init__(
         self,
         dim_in=3,
@@ -465,9 +523,9 @@ class HashSirenNet(pl.LightningModule):
         **kwargs
     ):
         super().__init__()
-        self.dim_in=dim_in
-        self.dim_hidden=dim_hidden
-        self.dim_out=dim_out
+        self.dim_in = dim_in
+        self.dim_hidden = dim_hidden
+        self.dim_out = dim_out
         self.num_layers = num_layers
         self.w0 = w0
         self.w0_initial = w0_initial
@@ -477,16 +535,35 @@ class HashSirenNet(pl.LightningModule):
         self.config = config
         self.losses = []
 
-        #networks
-        self.encoding = tcnn.Encoding(n_input_dims=self.dim_in, encoding_config=config["encoding"], dtype=torch.float32)
-        self.modulator = Modulator(dim_in=self.config["encoding"]['n_levels'] * self.config["encoding"]['n_features_per_level'], dim_hidden=self.dim_hidden, num_layers=self.num_layers) 
-        self.siren = SirenNet(dim_in=self.dim_in, dim_hidden=self.dim_hidden, dim_out=self.dim_out, num_layers=self.num_layers, w0=self.w0, w0_initial=self.w0_initial, use_bias=self.use_bias, final_activation=self.final_activation, lr=self.lr)
+        # networks
+        self.encoding = tcnn.Encoding(
+            n_input_dims=self.dim_in,
+            encoding_config=config["encoding"],
+            dtype=torch.float32,
+        )
+        self.modulator = Modulator(
+            dim_in=self.config["encoding"]["n_levels"]
+            * self.config["encoding"]["n_features_per_level"],
+            dim_hidden=self.dim_hidden,
+            num_layers=self.num_layers,
+        )
+        self.siren = SirenNet(
+            dim_in=self.dim_in,
+            dim_hidden=self.dim_hidden,
+            dim_out=self.dim_out,
+            num_layers=self.num_layers,
+            w0=self.w0,
+            w0_initial=self.w0_initial,
+            use_bias=self.use_bias,
+            final_activation=self.final_activation,
+            lr=self.lr,
+        )
 
     def forward(self, x):
         lat = self.encoding(x)
         mods = self.modulator(lat)
 
-        mods = cast_tuple(mods, self.num_layers) 
+        mods = cast_tuple(mods, self.num_layers)
 
         for layer, mod in zip(self.siren.layers, mods):
 
@@ -513,5 +590,3 @@ class HashSirenNet(pl.LightningModule):
     def predict_step(self, batch, batch_idx):
         x, y = batch
         return self(x)
-
-

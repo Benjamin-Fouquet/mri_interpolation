@@ -1,4 +1,4 @@
-'''
+"""
 Not GPU compatible yet
 TODO
 Done:
@@ -6,94 +6,105 @@ Done:
 -theta is correctly updated at iterations
 -Correct output so that you have all losses correctly displayed Done
 -LSTM parameters kept between iteration, but a reset on the conv still allow to learn somewhat, how ?! (ftm, reset_state does nothing for ConvOptimizer). To test later
-'''
+"""
 
-import torch
-from torch import nn
-from torch.nn import functional as F
-from typing import Tuple, Union, Dict
-
-# import pytorch_lightning as pl
-import numpy as np
-import matplotlib.pyplot as plt
-import functorch
-from torch.autograd import Variable
-
-import math
-from einops import rearrange
-import pytorch_lightning as pl
-import torchvision
-import os
-from dataclasses import dataclass, field
-import sys
 import argparse
 import copy
+import math
+import os
+import sys
+from dataclasses import dataclass, field
+from typing import Dict, Tuple, Union
+
+import functorch
+import matplotlib.pyplot as plt
+# import pytorch_lightning as pl
+import numpy as np
+import pytorch_lightning as pl
+import torch
+from torch import nn
+from torch.autograd import Variable
+from torch.nn import functional as F
+
+import torchvision
+from einops import rearrange
+
 
 @dataclass
 class Config:
-    batch_size: int = 784 #28 * 28
+    batch_size: int = 784  # 28 * 28
     inner_loop_it: int = 5
     outer_loop_it: int = 10
     epochs: int = 100
-    num_workers:int = os.cpu_count()
+    num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     fixed_seed: bool = True
-    dataset_path: str = '/home/benjamin/Documents/Datasets'
+    dataset_path: str = "/home/benjamin/Documents/Datasets"
     train_target = [1]
     test_target = [7]
 
-    #Network parameters
+    # Network parameters
     dim_in: int = 2
     dim_hidden: int = 32
-    dim_out:int = 1
-    num_layers:int = 2
+    dim_out: int = 1
+    num_layers: int = 2
     w0: float = 30.0
-    w0_initial:float = 30.0
+    w0_initial: float = 30.0
     use_bias: bool = True
-    final_activation=None
-    lr: float = 1e-3 #G requires training with a custom lr, usually lr * 0.1
-    opt_type: str = 'LSTM'
+    final_activation = None
+    lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1
+    opt_type: str = "LSTM"
     conv_channels = [8, 8, 8]
 
-    comment: str = 'Mean initialisation'
+    comment: str = "Mean initialisation"
 
-    #output
-    output_path:str = 'results_siren/'
+    # output
+    output_path: str = "results_siren/"
     if os.path.isdir(output_path) is False:
         os.mkdir(output_path)
-    experiment_number:int = 0 if len(os.listdir(output_path)) == 0 else len(os.listdir(output_path))
+    experiment_number: int = 0 if len(os.listdir(output_path)) == 0 else len(
+        os.listdir(output_path)
+    )
 
-    def export_to_txt(self, file_path: str = '') -> None:
-        with open(file_path + 'config.txt', 'w') as f:
+    def export_to_txt(self, file_path: str = "") -> None:
+        with open(file_path + "config.txt", "w") as f:
             for key in self.__dict__:
-                f.write(str(key) + ' : ' + str(self.__dict__[key]) + '\n')
+                f.write(str(key) + " : " + str(self.__dict__[key]) + "\n")
+
 
 config = Config()
 
-#name of arguments must match name of Config class /// TODO: compatibility with list target ?
-if __name__ == '__main__':
+# name of arguments must match name of Config class /// TODO: compatibility with list target ?
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--inner_loop_it', help='Inner loop iterations', type=int, required=False)
-    parser.add_argument('--outer_loop_it', help='Outer loop iterations', type=int, required=False)
-    parser.add_argument('--epochs', help='Number of epochs', type=int, required=False)
-    parser.add_argument('--train_target', help='train digit', type=int, required=False)
-    parser.add_argument('--test_target', help='test digit', type=int, required=False)
-    parser.add_argument('--opt_type', help='optimizer model type', type=str, required=False)
+    parser.add_argument(
+        "--inner_loop_it", help="Inner loop iterations", type=int, required=False
+    )
+    parser.add_argument(
+        "--outer_loop_it", help="Outer loop iterations", type=int, required=False
+    )
+    parser.add_argument("--epochs", help="Number of epochs", type=int, required=False)
+    parser.add_argument("--train_target", help="train digit", type=int, required=False)
+    parser.add_argument("--test_target", help="test digit", type=int, required=False)
+    parser.add_argument(
+        "--opt_type", help="optimizer model type", type=str, required=False
+    )
 
     args = parser.parse_args()
 
-#parsed argument -> config
+# parsed argument -> config
 for key in args.__dict__:
     if args.__dict__[key] is not None:
         config.__dict__[key] = args.__dict__[key]
 
-#Correct ouput_path
-filepath = config.output_path + str(config.experiment_number) + '/'
+# Correct ouput_path
+filepath = config.output_path + str(config.experiment_number) + "/"
 if os.path.isdir(filepath) is False:
     os.mkdir(filepath)
 
 if config.fixed_seed:
     torch.random.manual_seed(0)
+
 
 def exists(val):
     return val is not None
@@ -226,14 +237,15 @@ class SirenNet(pl.LightningModule):
         return optimizer
 
     def set_parameters(self, theta):
-        '''
+        """
         Manually set parameters using matching theta, not foolproof
-        '''
+        """
         p_dict = self.state_dict()
         for p, thet in zip(p_dict, theta):
             p_dict[p] = thet.data
         self.load_state_dict(p_dict)
-        self.eval() #supposed to be important when you set parameters or load state
+        self.eval()  # supposed to be important when you set parameters or load state
+
 
 class Optimizer(nn.Module):
     """
@@ -249,7 +261,7 @@ class Optimizer(nn.Module):
             num_layers=num_layers,
         )
         # self.lstm = nn.LSTM(input_size=2 * input_size, hidden_size=hidden_size, num_layers=num_layers)
-        self.output = nn.Linear(hidden_size, np.prod(input_shape)) #
+        self.output = nn.Linear(hidden_size, np.prod(input_shape))  #
         # self.output = nn.Identity()
         self.input_shape = input_shape
         # cell and hidden states are attributes of the class in this example
@@ -259,7 +271,9 @@ class Optimizer(nn.Module):
         self.register_buffer(
             "hidden_state", torch.randn(num_layers, hidden_size), persistent=True
         )
-        self.preproc = preproc  # WIP: preprocessing as discussed in the annex of "learning to learn by gradient descent by gradient descent"
+        self.preproc = (
+            preproc
+        )  # WIP: preprocessing as discussed in the annex of "learning to learn by gradient descent by gradient descent"
         self.preproc_factor = 10.0
         self.preproc_threshold = np.exp(-self.preproc_factor)
 
@@ -303,14 +317,16 @@ class Optimizer(nn.Module):
 
         return self.output(out).reshape(self.input_shape)
 
+
 class ConvOptimizer(nn.Module):
 
-    '''
+    """
     Marche que pour couche du centre, only 2D si tu fais une conv par couche, essayer full stack parameters ?
-    '''
-    def __init__(self, input, channels=[32, 32, 32], activation_func=None)->None:
+    """
+
+    def __init__(self, input, channels=[32, 32, 32], activation_func=None) -> None:
         super().__init__()
-        #Build the layer system
+        # Build the layer system
         conv_layer = nn.Conv2d
         layers = []
         for idx in range(len(channels)):
@@ -329,18 +345,12 @@ class ConvOptimizer(nn.Module):
                 layers.append(activation_func)
 
         last_layer = conv_layer(
-            in_channels=channels[-1],
-            out_channels=1,
-            kernel_size=3,
-            stride=1,
-            padding=1,
+            in_channels=channels[-1], out_channels=1, kernel_size=3, stride=1, padding=1
         )
         layers.append(last_layer)
         self.model = nn.Sequential(*layers)
 
-    def reset_state(
-        self,
-    ):  
+    def reset_state(self,):
         pass
         # for parameter in self.parameters():
         #     parameter.data = torch.randn(parameter.shape) * 0.01
@@ -350,32 +360,31 @@ class ConvOptimizer(nn.Module):
     def forward(self, x):
         return self.model(x)
 
+
 #####################
-#DATASET PREPARATION#
+# DATASET PREPARATION#
 #####################
-mnist_dataset = torchvision.datasets.MNIST(
-    root=config.dataset_path, download=False
-)
+mnist_dataset = torchvision.datasets.MNIST(root=config.dataset_path, download=False)
 
 # #get all digits from train_targets and mean them
 # mean_digit_tensor = torch.zeros(28, 28)
 # for digit_idx, target in enumerate(mnist_dataset.targets):
 #     if int(target) in config.train_target:
 #         mean_digit_tensor += torchvision.transforms.ToTensor()(mnist_dataset[digit_idx][0]).squeeze()
-        
+
 # #normalization
 # mean_digit_tensor = mean_digit_tensor / torch.max(mean_digit_tensor)
 # mean_digit_tensor = mean_digit_tensor * 2 - 1
 
-#fetch the wanted train digit, 1 digit version
+# fetch the wanted train digit, 1 digit version
 for digit_idx, target in enumerate(mnist_dataset.targets):
     if int(target) in config.train_target:
-        digit = mnist_dataset[digit_idx][0] # a PIL image
+        digit = mnist_dataset[digit_idx][0]  # a PIL image
         break
 
 digit_tensor = torchvision.transforms.ToTensor()(digit).squeeze()
 
-#normalization
+# normalization
 digit_tensor = digit_tensor * 2 - 1
 digit_shape = digit_tensor.shape
 
@@ -387,7 +396,7 @@ x_flat = torch.Tensor(mgrid.reshape(-1, 2))
 y_flat = torch.Tensor(digit_tensor.flatten()).unsqueeze(-1)
 # mean_y_flat = torch.Tensor(mean_digit_tensor.flatten()).unsqueeze(-1)
 
-#This dataset contains 1 target digit
+# This dataset contains 1 target digit
 dataset = torch.utils.data.TensorDataset(x_flat, y_flat)
 train_loader = torch.utils.data.DataLoader(
     dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers
@@ -435,7 +444,7 @@ model = SirenNet(
 model_func, theta_init = functorch.make_functional(model)
 
 ########################
-#STANDARD TRAINING LOOP#
+# STANDARD TRAINING LOOP#
 ########################
 model_losses_adam_opt = []
 opt = torch.optim.Adam(model.parameters(), lr=config.lr)
@@ -448,7 +457,7 @@ for _ in range(config.epochs):
     loss.backward()
     opt.step()
 
-    print(f'Loss: {loss.data}')
+    print(f"Loss: {loss.data}")
     model_losses_adam_opt.append(loss.detach().numpy())
 
 pred = model(x_flat)
@@ -456,14 +465,14 @@ image = pred.reshape(digit_shape)
 fig, axes = plt.subplots(1, 2)
 axes[0].imshow(image.detach().numpy())
 axes[1].imshow(digit_tensor.detach().numpy())
-fig.suptitle('Standard training')
-axes[0].set_title('Prediction')
-axes[1].set_title('Ground truth')
-plt.savefig(filepath + 'training_result_standart.png')
+fig.suptitle("Standard training")
+axes[0].set_title("Prediction")
+axes[1].set_title("Ground truth")
+plt.savefig(filepath + "training_result_standart.png")
 plt.clf()
 
 ####################
-#MEAN TRAINING LOOP#
+# MEAN TRAINING LOOP#
 ####################
 # model.set_parameters(theta_init)
 # model_losses_adam_opt_mean = []
@@ -494,24 +503,39 @@ plt.clf()
 # model_func, theta_mean = functorch.make_functional(model)
 
 #########################
-#OPTIMIZER TRAINING LOOP#
+# OPTIMIZER TRAINING LOOP#
 #########################
-if config.opt_type == 'LSTM':
+if config.opt_type == "LSTM":
     optimizer_list = [
-        Optimizer(input_shape=parameter.shape, hidden_size=np.prod(parameter.shape) * 10)
+        Optimizer(
+            input_shape=parameter.shape, hidden_size=np.prod(parameter.shape) * 10
+        )
         for parameter in theta_init
     ]
-    opt_optimizer = torch.optim.Adam([p for g in optimizer_list for p in g.parameters()], lr=config.lr)
+    opt_optimizer = torch.optim.Adam(
+        [p for g in optimizer_list for p in g.parameters()], lr=config.lr
+    )
 
-if config.opt_type == 'conv':
+if config.opt_type == "conv":
     optimizer_list = []
     for parameter in theta_init:
         if np.prod(parameter.shape) > (parameter.shape[0] * 3):
-            optimizer_list.append(ConvOptimizer(parameter, channels=config.conv_channels, activation_func=None))
+            optimizer_list.append(
+                ConvOptimizer(
+                    parameter, channels=config.conv_channels, activation_func=None
+                )
+            )
         else:
-            optimizer_list.append(Optimizer(input_shape=parameter.shape, hidden_size=np.prod(parameter.shape) * 10))
+            optimizer_list.append(
+                Optimizer(
+                    input_shape=parameter.shape,
+                    hidden_size=np.prod(parameter.shape) * 10,
+                )
+            )
 
-    opt_optimizer = torch.optim.Adam([p for g in optimizer_list for p in g.parameters()], lr=config.lr)
+    opt_optimizer = torch.optim.Adam(
+        [p for g in optimizer_list for p in g.parameters()], lr=config.lr
+    )
 
 log_outer_losses = []
 
@@ -539,7 +563,9 @@ for epoch in range(config.outer_loop_it):
                     .detach()
                 )
             else:
-                theta_update = optimizer_list[i](theta_gradients[i].unsqueeze(0).detach())
+                theta_update = optimizer_list[i](
+                    theta_gradients[i].unsqueeze(0).detach()
+                )
             theta_update = theta_update.reshape(theta[i].shape)
             theta[i] = theta[i] - theta_update * 0.001
 
@@ -556,15 +582,14 @@ for epoch in range(config.outer_loop_it):
     opt_optimizer.zero_grad()
     outer_loss.backward()
     opt_optimizer.step()
-    
 
-    print(f'outer loss: {outer_loss.data}, model_loss: {model_loss.data}')
+    print(f"outer loss: {outer_loss.data}, model_loss: {model_loss.data}")
 
 #######################
-#TRAINING LOOP AFTER G#
+# TRAINING LOOP AFTER G#
 #######################
 model.set_parameters(theta)
-opt = torch.optim.Adam(model.parameters(), lr=config.lr) 
+opt = torch.optim.Adam(model.parameters(), lr=config.lr)
 
 for _ in range(config.epochs):
     x, y = next(iter(train_loader))
@@ -575,33 +600,37 @@ for _ in range(config.epochs):
     loss.backward()
     opt.step()
 
-    print(f'Loss after G: {loss.data}')
+    print(f"Loss after G: {loss.data}")
     log_model_losses.append(loss.detach().numpy())
 
-#one prediction on training set
+# one prediction on training set
 pred = model(x_flat)
 image = pred.reshape(digit_shape)
 fig, axes = plt.subplots(1, 2)
 axes[0].imshow(image.detach().numpy())
 axes[1].imshow(digit_tensor.detach().numpy())
-fig.suptitle('Learning to learn')
-axes[0].set_title('Prediction')
-axes[1].set_title('Ground truth')
-plt.savefig(filepath + 'training_result_G_opt.png')
+fig.suptitle("Learning to learn")
+axes[0].set_title("Prediction")
+axes[1].set_title("Ground truth")
+plt.savefig(filepath + "training_result_G_opt.png")
 plt.clf()
 
-fig1 = plt.plot(range(config.epochs), model_losses_adam_opt, label='Standard training')
-fig2 = plt.plot(range(config.inner_loop_it + config.epochs), log_model_losses, label='G Optimized training')
-legend = plt.legend(['Standard training', 'Optimized training'])
-plt.title('Standard vs optimized training')
-plt.savefig(filepath + 'Losses_sdt_opt.png')
+fig1 = plt.plot(range(config.epochs), model_losses_adam_opt, label="Standard training")
+fig2 = plt.plot(
+    range(config.inner_loop_it + config.epochs),
+    log_model_losses,
+    label="G Optimized training",
+)
+legend = plt.legend(["Standard training", "Optimized training"])
+plt.title("Standard vs optimized training")
+plt.savefig(filepath + "Losses_sdt_opt.png")
 plt.clf()
 
 #################################################
-#TRAINING LOOP WITH INITIALIZATION BUT WITHOUT G# 
+# TRAINING LOOP WITH INITIALIZATION BUT WITHOUT G#
 #################################################
 # model.set_parameters(theta_mean)
-# opt = torch.optim.Adam(model.parameters(), lr=config.lr) 
+# opt = torch.optim.Adam(model.parameters(), lr=config.lr)
 
 # log_model_losses_init = []
 # for _ in range(config.epochs):
@@ -637,20 +666,22 @@ plt.clf()
 
 
 ####################
-#Transfert Learning#
+# Transfert Learning#
 ####################
-#dataset preparation
+# dataset preparation
 for digit_idx, target in enumerate(mnist_dataset.targets):
     if int(target) in config.test_target:
-        digit = mnist_dataset[digit_idx][0] # a PIL image  
-        break 
+        digit = mnist_dataset[digit_idx][0]  # a PIL image
+        break
 
-#In case you arrive at the end of dataset
+# In case you arrive at the end of dataset
 if digit is None:
-    for digit_idx, target in enumerate(mnist_dataset.targets[digit_idx + 1:], start=digit_idx + 1):
+    for digit_idx, target in enumerate(
+        mnist_dataset.targets[digit_idx + 1 :], start=digit_idx + 1
+    ):
         if int(target) in config.test_target:
-            digit = mnist_dataset[digit_idx][0] # a PIL image  
-            break 
+            digit = mnist_dataset[digit_idx][0]  # a PIL image
+            break
 
 digit_tensor = torchvision.transforms.ToTensor()(digit).squeeze()
 digit_tensor = digit_tensor * 2 - 1
@@ -663,7 +694,7 @@ test_loader = torch.utils.data.DataLoader(
     dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers
 )
 
-#pre-trained model version
+# pre-trained model version
 model.set_parameters(theta)
 opt = torch.optim.Adam(model.parameters(), lr=config.lr)
 
@@ -677,7 +708,7 @@ for _ in range(config.epochs):
     loss.backward()
     opt.step()
 
-    print(f'Transfert Loss: {loss.data}')
+    print(f"Transfert Loss: {loss.data}")
     transfert_losses.append(loss.detach().numpy())
 
 # #use of pre trained LSTM
@@ -728,18 +759,18 @@ for _ in range(config.epochs):
 #     print(f'Transfert Loss: {loss.data}')
 #     transfert_losses.append(loss.detach().numpy())
 
-#one prediction on training set
+# one prediction on training set
 pred = model(x_flat)
 image = pred.reshape(digit_shape)
 fig, axes = plt.subplots(1, 2)
 axes[0].imshow(image.detach().numpy())
 axes[1].imshow(digit_tensor.detach().numpy())
-fig.suptitle('Transfert training')
-axes[0].set_title('Prediction')
-axes[1].set_title('Ground truth')
-plt.savefig(filepath + 'training_result_transfert.png')
+fig.suptitle("Transfert training")
+axes[0].set_title("Prediction")
+axes[1].set_title("Ground truth")
+plt.savefig(filepath + "training_result_transfert.png")
 
-#Classical loop for comparison
+# Classical loop for comparison
 model.set_parameters(theta_init)
 opt = torch.optim.Adam(model.parameters(), lr=config.lr)
 
@@ -753,31 +784,33 @@ for _ in range(config.epochs):
     loss.backward()
     opt.step()
 
-    print(f'Classic Loss: {loss.data}')
+    print(f"Classic Loss: {loss.data}")
     losses.append(loss.detach().numpy())
 
-#one prediction on training set
+# one prediction on training set
 pred = model(x_flat)
 image = pred.reshape(digit_shape)
 fig, axes = plt.subplots(1, 2)
 axes[0].imshow(image.detach().numpy())
 axes[1].imshow(digit_tensor.detach().numpy())
-fig.suptitle('No transfert training')
-axes[0].set_title('Prediction')
-axes[1].set_title('Ground truth')
-plt.savefig(filepath + 'training_result_no_transfert.png')
+fig.suptitle("No transfert training")
+axes[0].set_title("Prediction")
+axes[1].set_title("Ground truth")
+plt.savefig(filepath + "training_result_no_transfert.png")
 plt.clf()
 
-fig1 = plt.plot(range(len(losses)), losses, label='Standard training')
-fig2 = plt.plot(range(len(transfert_losses)), transfert_losses, label='Transfert training')
-legend = plt.legend(['Standard training', 'Transfert training'])
-plt.title('Standard vs optimized training')
-plt.savefig(filepath + 'Losses_transfert.png')
+fig1 = plt.plot(range(len(losses)), losses, label="Standard training")
+fig2 = plt.plot(
+    range(len(transfert_losses)), transfert_losses, label="Transfert training"
+)
+legend = plt.legend(["Standard training", "Transfert training"])
+plt.title("Standard vs optimized training")
+plt.savefig(filepath + "Losses_transfert.png")
 plt.clf()
 config.export_to_txt(filepath)
 
 ###################################
-#Training initialization without G#
+# Training initialization without G#
 ###################################
 noG_init_losses = []
 model.set_parameters(theta_init)
@@ -791,10 +824,10 @@ for _ in range(25):
     loss.backward()
     opt.step()
 
-    print(f'Loss: {loss.data}')
+    print(f"Loss: {loss.data}")
     noG_init_losses.append(loss.detach().numpy())
 
-opt = torch.optim.Adam(model.parameters(), lr=config.lr) #* 10
+opt = torch.optim.Adam(model.parameters(), lr=config.lr)  # * 10
 for _ in range(config.epochs):
     x, y = next(iter(test_loader))
     y_pred = model(x)
@@ -804,7 +837,7 @@ for _ in range(config.epochs):
     loss.backward()
     opt.step()
 
-    print(f'Loss: {loss.data}')
+    print(f"Loss: {loss.data}")
     noG_init_losses.append(loss.detach().numpy())
 
 pred = model(x_flat)
@@ -812,25 +845,41 @@ image = pred.reshape(digit_shape)
 fig, axes = plt.subplots(1, 2)
 axes[0].imshow(image.detach().numpy())
 axes[1].imshow(digit_tensor.detach().numpy())
-fig.suptitle('NoG Training')
-axes[0].set_title('Prediction')
-axes[1].set_title('Ground truth')
-plt.savefig(filepath + 'noG_result_standart.png')
+fig.suptitle("NoG Training")
+axes[0].set_title("Prediction")
+axes[1].set_title("Ground truth")
+plt.savefig(filepath + "noG_result_standart.png")
 plt.clf()
 
-fig1 = plt.plot(range(len(losses)), losses, label='Standard training')
-fig2 = plt.plot(range(len(transfert_losses)), transfert_losses, label='Transfert training')
-fig3 = plt.plot(range(len(noG_init_losses)), noG_init_losses, label='NoG init training')
-legend = plt.legend(['Standard training', 'Transfert training', 'NoG_init'])
-plt.title('Standard vs optimized training vs noG init')
-plt.savefig(filepath + 'Losses_transfert.png')
+fig1 = plt.plot(range(len(losses)), losses, label="Standard training")
+fig2 = plt.plot(
+    range(len(transfert_losses)), transfert_losses, label="Transfert training"
+)
+fig3 = plt.plot(range(len(noG_init_losses)), noG_init_losses, label="NoG init training")
+legend = plt.legend(["Standard training", "Transfert training", "NoG_init"])
+plt.title("Standard vs optimized training vs noG init")
+plt.savefig(filepath + "Losses_transfert.png")
 plt.clf()
 
-#memory footprint
-mem_params = sum([param.nelement()*param.element_size() for param in model.parameters()])
-mem_bufs = sum([buf.nelement()*buf.element_size() for buf in model.buffers()])
-mem = mem_params + mem_bufs # in bytes
+# memory footprint
+mem_params = sum(
+    [param.nelement() * param.element_size() for param in model.parameters()]
+)
+mem_bufs = sum([buf.nelement() * buf.element_size() for buf in model.buffers()])
+mem = mem_params + mem_bufs  # in bytes
 
-mem_params += sum([param.nelement()*param.element_size()for mod in optimizer_list for param in mod.parameters()])
-mem_bufs += sum([buf.nelement()*buf.element_size()for mod in optimizer_list for buf in mod.buffers()])
-mem += (mem_params + mem_bufs) # in bytes
+mem_params += sum(
+    [
+        param.nelement() * param.element_size()
+        for mod in optimizer_list
+        for param in mod.parameters()
+    ]
+)
+mem_bufs += sum(
+    [
+        buf.nelement() * buf.element_size()
+        for mod in optimizer_list
+        for buf in mod.buffers()
+    ]
+)
+mem += mem_params + mem_bufs  # in bytes

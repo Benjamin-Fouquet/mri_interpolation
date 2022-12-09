@@ -1,39 +1,42 @@
-'''
+"""
 Small script to test siren vs map_coordinates
-'''
+"""
 
-import nibabel
+import asyncio
+import functools
+import os
+
+import nibabel as nib
 import nibabel.processing
+import numba
 import numpy as np
+import pytorch_lightning as pl
+import scipy.ndimage
+import torch
 from scipy.ndimage import map_coordinates
-import models
+from torch.utils.data import DataLoader, TensorDataset
+
 import config as cg
 import datamodules
-import torch
-import pytorch_lightning as pl
-from torch.utils.data import TensorDataset, DataLoader
-import os
-import nibabel as nib
-import functools
-import asyncio
-import numba
+import models
 import SimpleITK as sitk
-import scipy.ndimage
 
-filepath = 'for_francois/correc/'
+filepath = "for_francois/correc/"
 
 # model_file = 'lightning_logs/version_38/checkpoints/epoch=49-step=1800.ckpt'
-model_file = '/home/aorus-users/Benjamin/git_repos/mri_interpolation/data/model_siren_e50_b20000.ckpt'
+model_file = "/home/aorus-users/Benjamin/git_repos/mri_interpolation/data/model_siren_e50_b20000.ckpt"
 
-model = models.SirenNet().load_from_checkpoint(model_file, dim_in=3, dim_hidden=512, dim_out=1, num_layers=5, w0=30.)
+model = models.SirenNet().load_from_checkpoint(
+    model_file, dim_in=3, dim_hidden=512, dim_out=1, num_layers=5, w0=30.0
+)
 
 config = cg.Config()
 
 # HRimage = nibabel.load(config.image_path)
 # LRimage = nibabel.processing.resample_to_output(HRimage, voxel_sizes=(0.7, 0.7, 2.1))
 
-HRimage = nibabel.load('data/t2_111.nii.gz')
-LRimage = nibabel.load('data/t2_113.nii.gz')
+HRimage = nibabel.load("data/t2_111.nii.gz")
+LRimage = nibabel.load("data/t2_113.nii.gz")
 # trainer = pl.Trainer(gpus=[], max_epochs=10)
 
 
@@ -92,12 +95,12 @@ psf_sz = np.linspace(-0.5, 0.5, n_samples)
 psf_x, psf_y, psf_z = np.meshgrid(psf_sx, psf_sy, psf_sz, indexing="ij")
 
 # Define gaussian kernel as PSF model
-sigma = (
-    1.0 / 2.3548
-)  # could be anisotropic to reflect MRI sequences (see Kainz et al.)
+sigma = 1.0 / 2.3548  # could be anisotropic to reflect MRI sequences (see Kainz et al.)
+
 
 def gaussian(x, sigma):
     return np.exp(-x * x / (2 * sigma * sigma))
+
 
 psf = gaussian(psf_x, sigma) * gaussian(psf_y, sigma) * gaussian(psf_z, sigma)
 psf = psf / np.sum(psf)
@@ -147,9 +150,9 @@ psf_coordinates_in_siren = np.ones((3, psf.size))
 # pred = torch.concat(trainer.predict(model, train_loader))
 # nibabel.save(nibabel.Nifti1Image(pred.detach().reshape(260, 311, 260).numpy(), HRimage.affine), 'siren_highres_aftertraining.nii.gz')
 
-#script part for testing the map_coordinates vs siren
+# script part for testing the map_coordinates vs siren
 
-#map high res coords to low res matrix, manual correction needed for 100% fit
+# map high res coords to low res matrix, manual correction needed for 100% fit
 # x = torch.linspace(0, HRimage.shape[0] - 1, LRimage.shape[0])
 # y = torch.linspace(0, HRimage.shape[1] - 1, LRimage.shape[1])
 # z = torch.linspace(0, HRimage.shape[2] - 3, LRimage.shape[2])
@@ -191,16 +194,20 @@ psf_coordinates_in_siren = np.ones((3, psf.size))
 # nibabel.save(nibabel.Nifti1Image(outputdata, LRimage.affine), 'siren_interpol_ben_output.nii.gz')
 
 
-#create psf mgrid, -1 extended by psf_spacing * 2 to accomodate for edge voxels
+# create psf mgrid, -1 extended by psf_spacing * 2 to accomodate for edge voxels
 x = torch.linspace(-1.0056, 1.0056, (LRimage.shape[0]) * 5)
 z = torch.linspace(-1.0056, 1.0056, (LRimage.shape[2]) * 5)
 y = torch.linspace(-1.0242, 1.0242, (LRimage.shape[1]) * 5)
 
 mgrid_psf = torch.stack(torch.meshgrid(x, y, z), dim=-1)
 
-#create a TensorDataset and loader for prediction
-dataset = TensorDataset(mgrid_psf.reshape(-1, 3), torch.zeros((len(mgrid_psf.reshape(-1, 3)), 1)))
-loader = DataLoader(dataset=dataset, batch_size=300000, num_workers=config.num_workers // 2)
+# create a TensorDataset and loader for prediction
+dataset = TensorDataset(
+    mgrid_psf.reshape(-1, 3), torch.zeros((len(mgrid_psf.reshape(-1, 3)), 1))
+)
+loader = DataLoader(
+    dataset=dataset, batch_size=300000, num_workers=config.num_workers // 2
+)
 
 trainer = pl.Trainer(gpus=config.device)
 
@@ -208,18 +215,17 @@ yhat = torch.concat(trainer.predict(model, loader))
 
 pred = yhat.detach().cpu().numpy().reshape(mgrid_psf.shape[:-1])
 
-#TODO: calculate new affine = mat / 5
+# TODO: calculate new affine = mat / 5
 new_affine = LRimage.affine
-new_affine[:,0:3] /= 5
+new_affine[:, 0:3] /= 5
 
 # nib.save(nib.Nifti1Image(pred, new_affine), filepath + 'pred_before_PSF_bencode.nii.gz')
 
-#convolve with PSF // for gradient maintenance also possible to do it with Conv3D, need 2 unsqueeze (channel and batch), weights can be set manually
+# convolve with PSF // for gradient maintenance also possible to do it with Conv3D, need 2 unsqueeze (channel and batch), weights can be set manually
 def stride_conv3d(arr, arr2, s):
     return scipy.ndimage.convolve(arr, arr2)[::s, ::s, ::s]
+
 
 convolved = stride_conv3d(pred, psf, 5)
 
 # nib.save(nib.Nifti1Image(convolved, LRimage.affine), filepath + 'pred_after_PSF_bencode.nii.gz')
-
-

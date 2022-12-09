@@ -1,19 +1,18 @@
+import math
+import os
 
-import torch
-from torch import nn
-from torch.nn import functional as F
-
+import functorch
+import matplotlib.pyplot as plt
 # import pytorch_lightning as pl
 import numpy as np
-import matplotlib.pyplot as plt
-import functorch
-from torch.autograd import Variable
-
-import math
-from einops import rearrange
 import pytorch_lightning as pl
+import torch
+from torch import nn
+from torch.autograd import Variable
+from torch.nn import functional as F
+
 import torchvision
-import os
+from einops import rearrange
 
 batch_size = 784
 max_iter = 10
@@ -23,6 +22,7 @@ num_workers = os.cpu_count()
 device = [0] if torch.cuda.is_available() else []
 
 torch.random.manual_seed(0)
+
 
 def exists(val):
     return val is not None
@@ -155,13 +155,14 @@ class SirenNet(pl.LightningModule):
         return optimizer
 
     def set_parameters(self, theta):
-        '''
+        """
         Manually set parameters using matching theta, no foolproof
-        '''
+        """
         p_dict = self.state_dict()
         for p, thet in zip(p_dict, theta):
             p_dict[p] = thet.data
         self.load_state_dict(p_dict)
+
 
 class Optimizer(nn.Module):
     """
@@ -177,7 +178,7 @@ class Optimizer(nn.Module):
             num_layers=num_layers,
         )
         # self.lstm = nn.LSTM(input_size=2 * input_size, hidden_size=hidden_size, num_layers=num_layers)
-        self.output = nn.Linear(hidden_size, np.prod(input_shape)) #
+        self.output = nn.Linear(hidden_size, np.prod(input_shape))  #
         # self.output = nn.Identity()
         self.input_shape = input_shape
         # cell and hidden states are attributes of the class in this example
@@ -187,7 +188,9 @@ class Optimizer(nn.Module):
         self.register_buffer(
             "hidden_state", torch.randn(num_layers, hidden_size), persistent=True
         )
-        self.preproc = preproc  # WIP: preprocessing as discussed in the annex of "learning to learn by gradient descent by gradient descent"
+        self.preproc = (
+            preproc
+        )  # WIP: preprocessing as discussed in the annex of "learning to learn by gradient descent by gradient descent"
         self.preproc_factor = 10.0
         self.preproc_threshold = np.exp(-self.preproc_factor)
 
@@ -233,12 +236,13 @@ class Optimizer(nn.Module):
 
 
 class ConvOptimizer(nn.Module):
-    '''
+    """
     Marche que pour couche du centre, only 2D si tu fais une conv par couche, essayer full stack parameters ?
-    '''
-    def __init__(self, input, channels=[32, 32, 32], activation_func=None)->None:
+    """
+
+    def __init__(self, input, channels=[32, 32, 32], activation_func=None) -> None:
         super().__init__()
-        #Build the layer system
+        # Build the layer system
         conv_layer = nn.Conv2d
         layers = []
         for idx in range(len(channels)):
@@ -257,25 +261,20 @@ class ConvOptimizer(nn.Module):
                 layers.append(activation_func)
 
         last_layer = conv_layer(
-            in_channels=channels[-1],
-            out_channels=1,
-            kernel_size=3,
-            stride=1,
-            padding=1,
+            in_channels=channels[-1], out_channels=1, kernel_size=3, stride=1, padding=1
         )
         layers.append(last_layer)
         self.model = nn.Sequential(*layers)
 
-    def reset_state(
-        self,
-    ):  
+    def reset_state(self,):
         for parameter in self.parameters():
             parameter.data = torch.randn(parameter.shape) * 0.01
-        #TODO: Better initialisation using noraml distribution ? See: https://pytorch.org/docs/stable/nn.init.html
+        # TODO: Better initialisation using noraml distribution ? See: https://pytorch.org/docs/stable/nn.init.html
         return None
 
     def forward(self, x):
         return self.model(x)
+
 
 mnist_dataset = torchvision.datasets.MNIST(
     root="/home/benjamin/Documents/Datasets", download=False
@@ -319,7 +318,7 @@ for _ in range(epochs2):
     loss.backward()
     opt.step()
 
-    print(f'Loss: {loss.data}')
+    print(f"Loss: {loss.data}")
     model_losses_adam_opt.append(loss.detach().numpy())
 
 
@@ -341,9 +340,15 @@ log_outer_losses = []
 
 for parameter in model_params:
     if np.prod(parameter.shape) > (parameter.shape[0] * 3):
-        optimizer_list.append(ConvOptimizer(parameter, channels=[8, 8, 8], activation_func=None))
+        optimizer_list.append(
+            ConvOptimizer(parameter, channels=[8, 8, 8], activation_func=None)
+        )
     else:
-        optimizer_list.append(Optimizer(input_shape=parameter.shape, hidden_size=np.prod(parameter.shape) * 10))
+        optimizer_list.append(
+            Optimizer(
+                input_shape=parameter.shape, hidden_size=np.prod(parameter.shape) * 10
+            )
+        )
 
 opt = torch.optim.Adam([p for g in optimizer_list for p in g.parameters()], lr=1e-3)
 
@@ -369,7 +374,9 @@ for epoch in range(epochs):
                     .detach()
                 )
             else:
-                theta_update = optimizer_list[i](theta_gradients[i].unsqueeze(0).detach())
+                theta_update = optimizer_list[i](
+                    theta_gradients[i].unsqueeze(0).detach()
+                )
             theta_update = theta_update.reshape(theta[i].shape)
             theta[i] = theta[i] - theta_update
 
@@ -387,7 +394,7 @@ for epoch in range(epochs):
     outer_loss.backward()
     opt.step()
 
-    print(f'outer loss: {outer_loss.data}, model_loss: {model_loss.data}')
+    print(f"outer loss: {outer_loss.data}, model_loss: {model_loss.data}")
 
 model = SirenNet(
     dim_in=2,
@@ -402,7 +409,7 @@ model = SirenNet(
 model.set_parameters(theta)
 opt = torch.optim.Adam(model.parameters(), lr=1e-2)
 
-#replaced with fit ?
+# replaced with fit ?
 for _ in range(epochs2):
     x, y = next(iter(train_loader))
     y_pred = model(x)
@@ -412,10 +419,10 @@ for _ in range(epochs2):
     loss.backward()
     opt.step()
 
-    print(f'Loss: {loss.data}')
+    print(f"Loss: {loss.data}")
     log_model_losses.append(loss.detach().numpy())
 
-#Transfert learning ?
+# Transfert learning ?
 digit = mnist_dataset[5]  # a PIL image
 digit_tensor = torchvision.transforms.ToTensor()(digit[0]).squeeze()
 digit_tensor = digit_tensor * 2 - 1
@@ -449,7 +456,7 @@ for _ in range(epochs2):
     loss.backward()
     opt.step()
 
-    print(f'Loss: {loss.data}')
+    print(f"Loss: {loss.data}")
     transfert_losses.append(loss.detach().numpy())
 
 

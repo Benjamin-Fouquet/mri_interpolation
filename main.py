@@ -1,62 +1,68 @@
-'''
+"""
 Training loops and outputs
 
 TODO:
 -3D outputs
 -Outputing losses either via tensorboard or classical matplot
 -save and load models in lightning
-'''
+"""
 
-import torch
-from torch import nn
-from torch.nn import functional as F
-from typing import Tuple, Union, Dict
-import functorch
-
-# import pytorch_lightning as pl
-import numpy as np
-import matplotlib.pyplot as plt
-# import functorch
-from torch.autograd import Variable
-from torchsummary import summary
-
-import math
-from einops import rearrange
-import pytorch_lightning as pl
-import torchvision
-import os
-from dataclasses import dataclass, field
-import sys
 import argparse
 import copy
-import config as cg
-import models
-import datamodules
-import optimizers
+import math
+import os
+import sys
+from dataclasses import dataclass, field
+from typing import Dict, Tuple, Union
+
+import functorch
+import matplotlib.pyplot as plt
 import nibabel as nib
+# import pytorch_lightning as pl
+import numpy as np
+import pytorch_lightning as pl
+import torch
+from torch import nn
+# import functorch
+from torch.autograd import Variable
+from torch.nn import functional as F
+
+import config as cg
+import datamodules
+import models
+import optimizers
+import torchvision
+from einops import rearrange
+from torchsummary import summary
 
 # from utils import psf_kernel, apply_psf, expend_x
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--inner_loop_it', help='Inner loop iterations', type=int, required=False)
-    parser.add_argument('--outer_loop_it', help='Outer loop iterations', type=int, required=False)
-    parser.add_argument('--epochs', help='Number of epochs', type=int, required=False)
-    parser.add_argument('--train_target', help='train digit', type=int, required=False)
-    parser.add_argument('--test_target', help='test digit', type=int, required=False)
-    parser.add_argument('--opt_type', help='optimizer model type', type=str, required=False)
+    parser.add_argument(
+        "--inner_loop_it", help="Inner loop iterations", type=int, required=False
+    )
+    parser.add_argument(
+        "--outer_loop_it", help="Outer loop iterations", type=int, required=False
+    )
+    parser.add_argument("--epochs", help="Number of epochs", type=int, required=False)
+    parser.add_argument("--train_target", help="train digit", type=int, required=False)
+    parser.add_argument("--test_target", help="test digit", type=int, required=False)
+    parser.add_argument(
+        "--opt_type", help="optimizer model type", type=str, required=False
+    )
 
     args = parser.parse_args()
 
 config = cg.Config()
 
-#parsed argument -> config
+# parsed argument -> config
 for key in args.__dict__:
     if args.__dict__[key] is not None:
         config.__dict__[key] = args.__dict__[key]
 
-#Correct ouput_path
-filepath = config.output_path + str(config.experiment_number) + '/'
+# Correct ouput_path
+filepath = config.output_path + str(config.experiment_number) + "/"
 if os.path.isdir(filepath) is False:
     os.mkdir(filepath)
 
@@ -64,7 +70,7 @@ if config.fixed_seed:
     torch.random.manual_seed(0)
 
 ###################
-#MODEL DECLARATION#
+# MODEL DECLARATION#
 ###################
 
 model = models.SirenNet(
@@ -102,7 +108,7 @@ train_loader = datamodule.train_dataloader()
 test_loader = datamodule.test_dataloader()
 
 #################
-#INITIALIZATIONS#
+# INITIALIZATIONS#
 #################
 # init_data = nib.load('data/mean.nii.gz')
 # model.set_parameters(theta_init)
@@ -129,7 +135,7 @@ test_loader = datamodule.test_dataloader()
 
 #     # if config.apply_psf:
 #     #     y_pred = apply_psf(tensor=y_pred, kernel=psf, image_shape=(290, 290))
-#     # loss = F.mse_loss(y_pred, y)    
+#     # loss = F.mse_loss(y_pred, y)
 #     opt.zero_grad()
 #     loss.backward()
 #     opt.step()
@@ -140,7 +146,7 @@ test_loader = datamodule.test_dataloader()
 model_func, theta_mean = functorch.make_functional(model)
 
 ########################
-#STANDARD TRAINING LOOP#
+# STANDARD TRAINING LOOP#
 ########################
 training_data = nib.load(config.image_path)
 model.set_parameters(theta_mean)
@@ -164,8 +170,8 @@ trainer.fit(model, train_loader)
 #     print(f'Loss: {loss.data}')
 #     model_losses_adam_opt.append(loss.detach().numpy())
 
-#TODO: correct prediction for MRI
-#squeeze?
+# TODO: correct prediction for MRI
+# squeeze?
 
 x, y = next(iter(train_loader))
 if isinstance(datamodule, datamodules.MNISTDataModule):
@@ -174,10 +180,10 @@ if isinstance(datamodule, datamodules.MNISTDataModule):
     fig, axes = plt.subplots(1, 2)
     axes[0].imshow(image.detach().numpy())
     axes[1].imshow(y.detach().numpy().reshape(28, 28))
-    fig.suptitle('Standard training')
-    axes[0].set_title('Prediction')
-    axes[1].set_title('Ground truth')
-    plt.savefig(filepath + 'training_result_standart.png')
+    fig.suptitle("Standard training")
+    axes[0].set_title("Prediction")
+    axes[1].set_title("Ground truth")
+    plt.savefig(filepath + "training_result_standart.png")
     plt.clf()
 
 if isinstance(datamodule, datamodules.MriDataModule):
@@ -185,27 +191,33 @@ if isinstance(datamodule, datamodules.MriDataModule):
     image = nib.load(config.image_path)
     data = image.get_fdata()
     if config.dim_in == 2:
-        data = data[:,:,int(data.shape[2] / 2)]
+        data = data[:, :, int(data.shape[2] / 2)]
     pred = torch.concat(trainer.predict(model, test_loader))
 
     if config.dim_in == 3:
         output = pred.cpu().detach().numpy().reshape(data.shape)
-        nib.save(nib.Nifti1Image(output, affine=np.eye(4)), filepath + 'training_result.nii.gz')
-        nib.save(nib.Nifti1Image(nib.load(config.image_path).get_fdata(), affine=np.eye(4)), filepath + 'ground_truth.nii.gz')
+        nib.save(
+            nib.Nifti1Image(output, affine=np.eye(4)),
+            filepath + "training_result.nii.gz",
+        )
+        nib.save(
+            nib.Nifti1Image(nib.load(config.image_path).get_fdata(), affine=np.eye(4)),
+            filepath + "ground_truth.nii.gz",
+        )
     if config.dim_in == 2:
         output = pred.cpu().detach().numpy().reshape((data.shape[0], data.shape[1]))
         fig, axes = plt.subplots(1, 2)
-        diff =  data - output
+        diff = data - output
         axes[0].imshow(output)
         axes[1].imshow(data)
-        fig.suptitle('Standard training')
-        axes[0].set_title('Prediction')
-        axes[1].set_title('Ground truth')
-        plt.savefig(filepath + 'training_result_standart.png')
+        fig.suptitle("Standard training")
+        axes[0].set_title("Prediction")
+        axes[1].set_title("Ground truth")
+        plt.savefig(filepath + "training_result_standart.png")
         plt.clf()
-        
+
         plt.imshow(diff)
-        plt.savefig(filepath + 'difference.png')
+        plt.savefig(filepath + "difference.png")
 
 # mean_loader = datamodule.mean_dataloader()
 # x, y = next(iter(mean_loader))
@@ -217,5 +229,4 @@ if isinstance(datamodule, datamodules.MriDataModule):
 # plt.plot(range(len(model_losses_adam_opt)), model_losses_adam_opt)
 # plt.savefig(filepath + 'Losses_sdt_opt.png')
 
-# trainer.save_checkpoint(filepath + 'checkpoint.ckpt') 
-    
+# trainer.save_checkpoint(filepath + 'checkpoint.ckpt')

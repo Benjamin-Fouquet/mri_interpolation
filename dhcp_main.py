@@ -10,22 +10,21 @@ TODO:
 """
 import argparse
 import glob
+import json
 import multiprocessing
 import os
 import sys
-import json
 
 import matplotlib.pyplot as plt
-import numpy as np
-
 import nibabel as nb
+import numpy as np
 import pytorch_lightning as pl
 import torch
-import torchio as tio
+from torch.utils.data import DataLoader
 
+import torchio as tio
 # local modules
 from models import ThreeDCNN, Unet
-from torch.utils.data import DataLoader
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="A test script")
@@ -61,12 +60,7 @@ if __name__ == "__main__":
         default=(16, 16, 16),
     )
     parser.add_argument(
-        "-bs", 
-        "--batch_size", 
-        help="Batch size", 
-        type=int, 
-        required=False, 
-        default=1
+        "-bs", "--batch_size", help="Batch size", type=int, required=False, default=1
     )
     parser.add_argument(
         "-p",
@@ -94,12 +88,7 @@ if __name__ == "__main__":
         default=3,
     )  # make it tuple compatible
     parser.add_argument(
-        "-e", 
-        "--epochs", 
-        help="max epochs", 
-        type=int, 
-        required=False, 
-        default=1
+        "-e", "--epochs", help="max epochs", type=int, required=False, default=1
     )
     parser.add_argument(
         "-a",
@@ -161,7 +150,7 @@ xp_parameters = {
     "queue_length": queue_length,
     "sample_per_volume": samples_per_volume,
     "n_max_subjects": n_max_subjects,
-    "test_subject": None, #to add
+    "test_subject": None,  # to add
     "model": architecture,
 }
 
@@ -195,17 +184,19 @@ if architecture == "ThreeDCNN":
 if architecture == "Unet":
     transforms = [
         tio.RescaleIntensity(out_min_max=(0, 1)),
-        #for Unet
-        tio.CropOrPad(256) #strong coupling, you can pad for making sure you dont loose data
+        # for Unet
+        tio.CropOrPad(
+            256
+        )  # strong coupling, you can pad for making sure you dont loose data
         # tio.transforms.ZNormalization(masking_method='label'),
         # tio.RandomAffine()
     ]
 
 # mask created before normalisation
 def create_rn_mask(subject: tio.Subject, percentage: int) -> None:
-    '''
+    """
     Create a random sampling of p % of the original image
-    '''
+    """
     shape = subject.t2.shape
     rn_mask = torch.FloatTensor(
         np.random.choice(
@@ -247,7 +238,7 @@ dataloader = DataLoader(
 )  # used for test
 
 
-if architecture =="ThreeDCNN":
+if architecture == "ThreeDCNN":
     model = ThreeDCNN(
         num_channels=num_channels,
         activation_func=activation_func,
@@ -257,9 +248,7 @@ if architecture =="ThreeDCNN":
     )
 if architecture == "Unet":
     model = Unet(
-        num_channels=num_channels,
-        xp_parameters=xp_parameters,
-        logging=logging,   
+        num_channels=num_channels, xp_parameters=xp_parameters, logging=logging
     )
 
 trainer = pl.Trainer(
@@ -288,25 +277,20 @@ except OSError:
 
 file_tag = f"_{architecture}_{percentage}_{epochs}_L{num_channels}__{activation_func}"
 
-torch.save(
-    model.state_dict(),
-    output_path
-    + f"state_dict" + file_tag + ".pt",
-)
+torch.save(model.state_dict(), output_path + f"state_dict" + file_tag + ".pt")
 
-#log losses as image
+# log losses as image
 losses = model.losses
 fig = plt.plot(range(len(losses)), losses)
-plt.savefig(
-    output_path
-    + f"loss" + file_tag + ".png"
-)
+plt.savefig(output_path + f"loss" + file_tag + ".png")
 
 # Create one output image for visusalisation
 if isinstance(model, ThreeDCNN):
     pred = model(subject.rn_t2.data.unsqueeze(0))
 if isinstance(model, Unet):
-    pred = model(subject.rn_t2.data[:, :256, :256, :256].unsqueeze(0)) #TODO: coupling, Unet specific
+    pred = model(
+        subject.rn_t2.data[:, :256, :256, :256].unsqueeze(0)
+    )  # TODO: coupling, Unet specific
 image_pred = pred.detach().numpy().squeeze()
 pred_nii_image = nb.Nifti1Image(image_pred, affine=np.eye(4))
 ground_truth_nii_image = nb.Nifti1Image(
@@ -337,26 +321,21 @@ ground_truth_nii_image = nb.Nifti1Image(
 #     subject.t2.data.detach().numpy().squeeze(), affine=np.eye(4)
 # )
 
-nb.save(
-    img=pred_nii_image,
-    filename=output_path
-    + f"output" + file_tag + ".nii.gz",
-)
+nb.save(img=pred_nii_image, filename=output_path + f"output" + file_tag + ".nii.gz")
 nb.save(
     img=ground_truth_nii_image,
-    filename=output_path
-   + f"ground_truth" + file_tag + ".nii.gz",
+    filename=output_path + f"ground_truth" + file_tag + ".nii.gz",
 )
 
-#create texte file from parameter dict
-with open(output_path + 'parameters.txt', 'w') as file:
-     file.write(json.dumps(xp_parameters))
+# create texte file from parameter dict
+with open(output_path + "parameters.txt", "w") as file:
+    file.write(json.dumps(xp_parameters))
 
 
 def create_nii(tensor: torch.Tensor, output_name: str) -> None:
-    '''
+    """
     Create nifti from tensor
-    '''
+    """
     nii_image = nb.Nifti1Image(tensor[0, ...].detach().numpy(), affine=np.eye(4))
     try:
         nb.save(nii_image, output_name + ".nii.gz")

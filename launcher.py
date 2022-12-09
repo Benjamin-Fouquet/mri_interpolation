@@ -1,20 +1,24 @@
-'''
+"""
 Barebone laucnher for tests
 
 TODO:
 -workers and device in conf OR include directly into class. prob if too many workers
-'''
+"""
 # HYDRA_FULL_ERROR=1
 
-import os
-import torch
 import json
-from models import SirenNet, ModulatedSiren #hashsiren to be done, modulated siren to be correced, probably recode models with config as arg
-import hydra
-from hydra.utils import get_class, instantiate, call
-from omegaconf import DictConfig, OmegaConf
+import os
+
 import pytorch_lightning as pl
+import torch
+
+import hydra
 from datamodules import MriDataModule
+from hydra.utils import call, get_class, instantiate
+from models import (ModulatedSiren,  # hashsiren to be done, modulated siren to be correced, probably recode models with config as arg
+                    SirenNet)
+from omegaconf import DictConfig, OmegaConf
+
 
 class FakeOptimizer:
     def __init__(self, arg1, arg2, arg3):
@@ -27,13 +31,13 @@ class FakeOptimizer:
 num_workers: int = os.cpu_count()
 device = [0] if torch.cuda.is_available() else []
 
-#either instanciate a dataclass config or if else?
-@hydra.main(version_base=None, config_path='config', config_name='base')
+# either instanciate a dataclass config or if else?
+@hydra.main(version_base=None, config_path="config", config_name="base")
 def app(cfg: DictConfig):
     global config
     config = cfg
 
-    #test fakeoptimizer
+    # test fakeoptimizer
     opt = get_class(cfg.optimizer)
     # #datamodule
     # datamodule = get_class(config.datamodule.cls)(config=config.datamodule)
@@ -47,7 +51,6 @@ def app(cfg: DictConfig):
     # model = model_cls(config=config.siren)
     # trainer = pl.Trainer(gpus=device, max_epochs=config.training.epochs, accumulate_grad_batches=config.training.accumulate_grad_batches)
     # trainer.fit(model, train_loader)
-
 
 
 if __name__ == "__main__":

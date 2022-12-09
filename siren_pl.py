@@ -13,13 +13,13 @@ import time
 from os.path import expanduser
 
 import matplotlib.pyplot as plt
+import nibabel as nib
 import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import nibabel as nib
 from einops import rearrange
 from skimage import metrics
 
@@ -331,4 +331,3 @@ if __name__ == "__main__":
         f.write(
             "Max memory allocated : " + str(torch.cuda.max_memory_allocated()) + "\n"
         )
-
