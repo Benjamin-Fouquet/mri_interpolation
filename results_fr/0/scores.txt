@@ -1,6 +1,0 @@
-MSE : 0.00203300068099656
-PSNR : 32.93922467213781
-SSMI : 0.9429754287043661
-training time  : 266 seconds
-Number of trainable parameters : 1053185
-Max memory allocated : 7395244544

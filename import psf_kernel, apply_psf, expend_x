@@ -1,4 +1,0 @@
-Help on function expend_x in module __main__:
-
-eexxppeenndd__xx(tensor, data)
-    Returns expended tensor followinf PSF (5 x 5), edges are ignored to stay within the -1, 1 boundaries
