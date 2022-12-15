@@ -4,7 +4,9 @@ Data options:
 -MNIST for tests
 -DHCP for real deal
 -potentially fabien and/or foetal to be added lated
--Also, right tests for datamodules ?
+-Also, write tests for datamodules ?
+TODO:
+-normalisation is manual and hardcoded, not great
 """
 
 import argparse
@@ -133,9 +135,12 @@ class MriImage(Dataset):
             image = nib.load(config.image_path)
         image = image.get_fdata(dtype=np.float32)  # [64:192, 64:192, 100:164]
         if config.dim_in == 3:
-            x = torch.linspace(-1, 1, steps=image.shape[0])
-            y = torch.linspace(-1, 1, steps=image.shape[1])
-            z = torch.linspace(-1, 1, steps=image.shape[2])
+            x = torch.linspace(0, 1, steps=image.shape[0])
+            y = torch.linspace(0, 1, steps=image.shape[1])
+            z = torch.linspace(0, 1, steps=image.shape[2])
+            # x = torch.linspace(-1, 1, steps=image.shape[0])
+            # y = torch.linspace(-1, 1, steps=image.shape[1])
+            # z = torch.linspace(-1, 1, steps=image.shape[2])
             mgrid = torch.stack(torch.meshgrid(x, y, z), dim=-1)
         if config.dim_in == 2:
             x = torch.linspace(-1, 1, steps=image.shape[0])

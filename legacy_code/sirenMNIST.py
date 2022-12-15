@@ -1,5 +1,5 @@
 """
-Not GPU compatible yet
+Not GPU compatible yet, first metalearning try for sirenNet
 TODO
 Done:
 -Check if parameter transfert is really taking place // works

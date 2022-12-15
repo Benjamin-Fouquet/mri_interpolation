@@ -1,5 +1,6 @@
 """
-Models with classical parameter definition
+TODO:
+-fetch convolutional models
 """
 import math
 
@@ -12,9 +13,7 @@ import commentjson as json
 import tinycudann as tcnn
 from einops import rearrange
 
-# Siren and utils#
-
-
+#utils for siren
 def exists(val):
     return val is not None
 
@@ -73,12 +72,35 @@ class Siren(nn.Module):
 
 # siren network
 class SirenNet(pl.LightningModule):
+    '''
+    PURPOSE:
+        Implicit representation of arbitrary functions. Mainly used for 2D, 3D image interpolation
+    ATTRIBUTES:
+        dim_in: dimension of input
+        dim_hidden: dimmension of hidden layers. 128-256 are recommended values
+        dim_out: dimension of output
+        num_layers: number of layers
+        w0: multiplying factor so that f(x) = sin(w0 * x) between layers. Recommended value, 30.0
+        w0_initial: see w0, recommended value 30.0 as per paper (ref to be found)
+        use_bias: if bias is used between layers, usually set to True
+        final_activation: flexible last activation for tasks other than interpolation. None means identity
+        lr: recommended 1e-4
+        layers: layers of the model, minus last layer
+        last_layer: final layer of model
+        losses: list of losses during training
+    METHODS:
+        forward: forward pass
+        training step: forward pass + backprop
+        predict step: used for inference
+        configure_optimizer: optimizer linked to model
+
+    '''
     def __init__(
         self,
-        dim_in=3,
-        dim_hidden=64,
-        dim_out=1,
-        num_layers=4,
+        dim_in: int = 3,
+        dim_hidden: int = 64,
+        dim_out: int = 1,
+        num_layers: int = 4,
         w0=30.0,
         w0_initial=30.0,
         use_bias=True,
@@ -192,9 +214,8 @@ class Modulator(nn.Module):
 # siren network
 class FourrierNet(pl.LightningModule):
     """
-    Tested several activation func after linear layers -> crap
+    First layer sin combined with MLP ReLU. Does not work
     """
-
     def __init__(
         self,
         dim_in=3,
@@ -425,7 +446,10 @@ class PsfSirenNet(SirenNet):
 
 class ModulatedSirenNet(pl.LightningModule):
     """
-    TODO: verify optimizer, confront to normal modulated
+    Lightning module for modulated siren. Each layer of the modulation is element-wise multiplied with the corresponding siren layer
+    TODO: 
+    -verify optimizer, confront to normal modulated: done, okay
+
     """
 
     def __init__(
@@ -504,7 +528,7 @@ class ModulatedSirenNet(pl.LightningModule):
 
 class HashSirenNet(pl.LightningModule):
     """
-    TODO: verify optimizer, confront to normal modulated
+    Lightning module for modulated siren where the latent encoding fed to the modulator is done via HashEncoding. Each layer of the modulation is element-wise multiplied with the corresponding siren layer
     """
 
     def __init__(
@@ -572,6 +596,51 @@ class HashSirenNet(pl.LightningModule):
             x *= mod
 
         return self.siren.last_layer(x)
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        return optimizer
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        z = self(x)
+
+        loss = F.mse_loss(z, y)
+        self.losses.append(loss.detach().cpu().numpy())
+
+        self.log("train_loss", loss)
+        return loss
+
+    def predict_step(self, batch, batch_idx):
+        x, y = batch
+        return self(x)
+
+class HashMLP(pl.LightningModule):
+    '''
+    Lightning module for HashMLP
+    '''
+    def __init__(
+        self,
+        dim_in,
+        dim_out,
+        config,
+        lr,
+        *args,
+        **kwargs
+    ):
+        super().__init__()
+        self.config = config
+        self.dim_in = dim_in
+        self.dim_out = dim_out
+        self.lr = lr
+        self.losses =[]
+
+        self.encoding = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
+        self.mlp= tcnn.Network(n_input_dims=self.config["encoding"]["n_levels"] * self.config["encoding"]["n_features_per_level"], n_output_dims=dim_out, network_config=config['network'])
+        self.model = torch.nn.Sequential(self.encoding, self.mlp)
+
+    def forward(self, x):
+        return self.model(x)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)

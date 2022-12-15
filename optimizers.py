@@ -1,5 +1,5 @@
 """
-Training loops and outputs
+Home made optimizers for metalearning appoaches. To be used with meta learning scripts
 """
 
 import argparse

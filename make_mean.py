@@ -1,3 +1,7 @@
+'''
+Script for creating a mean image from a set of mri
+'''
+
 import glob
 
 import nibabel as nib

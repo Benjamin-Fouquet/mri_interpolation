@@ -1,199 +1,90 @@
-import argparse
-import json
-import os
-from dataclasses import dataclass, field
-from typing import Any, Dict, Tuple, Union
-
-import matplotlib.pyplot as plt
-import nibabel as nib
-# import pytorch_lightning as pl
-import numpy as np
-import pytorch_lightning as pl
 import torch
-from torch import nn
 from torch.nn import functional as F
+import pytorch_lightning as pl
+from pl_bolts.datamodules import MNISTDataModule
+import os
+from ray.tune.integration.pytorch_lightning import TuneReportCallback
+import logging
 
+import optuna
+import pytorch_lightning as pl
+from datamodules import MNISTDataModule
+# from config.base import MNISTConfig
+import os
+from models import SirenNet, HashMLP, ModulatedSirenNet
+import ray.tune as tune
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from config.base import BaseConfig
+import json
 from datamodules import MriDataModule
-from einops import rearrange
-from models import HashSirenNet, ModulatedSirenNet, PsfSirenNet, SirenNet
-# import functorch
-from torchsummary import summary
+import optuna
+import sys
+from models import HashSirenNet
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--batch_size", help="batch size", type=int, required=False)
-    parser.add_argument("--epochs", help="Number of epochs", type=int, required=False)
-    parser.add_argument(
-        "--accumulate_grad_batches",
-        help="number of batches accumulated per gradient descent step",
-        type=int,
-        required=False,
-    )
-    parser.add_argument(
-        "--n_sample",
-        help="number of points for psf in x, y, z",
-        type=int,
-        required=False,
-    )
-    parser.add_argument(
-        "--model_class", help="Modele class selection", type=str, required=False
-    )
+config = BaseConfig()
 
-    args = parser.parse_args()
-
-with open("hash_config.json") as f:
+with open(BaseConfig.hashconfig_path) as f:
     enco_config = json.load(f)
 
+dm = MriDataModule(config=config)
+dm.prepare_data()
+dm.setup()
+train_loader = dm.train_dataloader()
 
-@dataclass
-class Config:
-    checkpoint_path = ""
-    batch_size: int = 16777216 // 50  # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 200
-    num_workers: int = os.cpu_count()
-    # num_workers:int = 0
-    device = [0] if torch.cuda.is_available() else []
-    # device = []
-    accumulate_grad_batches = None
-    image_path: str = "data/t2_256cube.nii.gz"
-    image_shape = nib.load(image_path).shape
-    coordinates_spacing: np.array = np.array(
-        (2 / image_shape[0], 2 / image_shape[1], 2 / image_shape[2])
+optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
+study_name = "example-study"  # Unique identifier of the study.
+storage_name = "sqlite:///{}.db".format(study_name)
+
+def objective(trial):
+    n_layers = trial.suggest_int("n_layers", 1, 6)
+    dim_hidden = trial.suggest_int("dim_hidden", 64, 256, 64)
+    w0 = trial.suggest_float("w0", 1.0, 70.0)
+    w0_initial = trial.suggest_float("w0", 1.0, 70.0)
+    # model_cls = trial.suggest_categorical("model_class", [SirenNet, ModulatedSirenNet])
+
+    losses = []
+     
+    model = config.model_cls(
+        dim_in=config.dim_in,
+        dim_hidden=dim_hidden,
+        dim_out=config.dim_out,
+        num_layers=n_layers,
+        w0=w0,
+        w0_initial=w0_initial,
+        use_bias=config.use_bias,
+        final_activation=config.final_activation,
+        lr=config.lr,
+        config=enco_config,
+        # coordinates_spacing=config.coordinates_spacing,
+        # n_sample=config.n_sample
     )
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=config.lr)
+    model.to('cuda')
 
-    # Network parameters
-    dim_in: int = 3
-    dim_hidden: int = 256
-    dim_out: int = 1
-    num_layers: int = 5
-    n_sample: int = 3
-    w0: float = 30.0
-    w0_initial: float = 30.0
-    use_bias: bool = True
-    final_activation = None
-    lr: float = 1e-4  # G requires training with a custom lr, usually lr * 0.1
-    datamodule: pl.LightningDataModule = MriDataModule
-    model_cls: pl.LightningModule = HashSirenNet
+    for epoch in range(config.epochs):
+        # TRAINING LOOP
+        for train_batch in train_loader:
+            x, y = train_batch
+            x = x.to("cuda")
+            y = y.to("cuda")
 
-    comment: str = ""
+            # x to hash
+            y_pred = model(x)
 
-    # output
-    output_path: str = "results_hash/"
-    if os.path.isdir(output_path) is False:
-        os.mkdir(output_path)
-    experiment_number: int = 0 if len(os.listdir(output_path)) == 0 else len(
-        os.listdir(output_path)
-    )
+            # x and mod to siren
 
-    def export_to_txt(self, file_path: str = "") -> None:
-        with open(file_path + "config.txt", "w") as f:
-            for key in self.__dict__:
-                f.write(str(key) + " : " + str(self.__dict__[key]) + "\n")
+            loss = F.mse_loss(y_pred, y)
+            print(f"epoch: {epoch}")
+            print("train loss: ", loss.item())
+            losses.append(loss.detach().cpu().numpy())
 
-    # TODO: prototype taking into account not typed attributes, loop via dir, but attr value access complicated
-    # def export_to_txt(self, file_path: str = '') -> None:
-    #     with open(file_path + 'config.txt', 'w') as f:
-    #         for attr in dir(self):
-    #             if not attr.startswith("__"):
-    #                 f.write(attr + ' : ' + str(self.__dict__[key]) + '\n')
+            loss.backward()
 
+            optimizer.step()
+            optimizer.zero_grad()
 
-config = Config()
-
-# parsed argument -> config
-for key in args.__dict__:
-    if args.__dict__[key] is not None:
-        config.__dict__[key] = args.__dict__[key]
-
-# correct for model class
-if args.model_class is not None:
-    if args.model_class == "PsfSirenNet":
-        config.model_cls = PsfSirenNet
-    elif args.model_class == "SirenNet":
-        config.model_cls = SirenNet
-    else:
-        print("model class not recognized")
-        raise ValueError
-
-# Correct ouput_path
-filepath = config.output_path + str(config.experiment_number) + "/"
-if os.path.isdir(filepath) is False:
-    os.mkdir(filepath)
-
-###################
-# MODEL DECLARATION#
-###################
-model = config.model_cls(
-    dim_in=config.dim_in,
-    dim_hidden=config.dim_hidden,
-    dim_out=config.dim_out,
-    num_layers=config.num_layers,
-    w0=config.w0,
-    w0_initial=config.w0_initial,
-    use_bias=config.use_bias,
-    final_activation=config.final_activation,
-    lr=config.lr,
-    config=enco_config,
-    # coordinates_spacing=config.coordinates_spacing,
-    # n_sample=config.n_sample
-)
-########################
-# DATAMODULE DECLARATION#
-########################
-datamodule = config.datamodule(config=config)
-datamodule.prepare_data()
-datamodule.setup()
-
-train_loader = datamodule.train_dataloader()
-# mean_train_loader = datamodule.mean_dataloader()
-test_loader = datamodule.test_dataloader()
-
-###############
-# TRAINING LOOP#
-###############
-model.train()
-
-trainer = pl.Trainer(
-    gpus=config.device,
-    max_epochs=config.epochs,
-    accumulate_grad_batches=config.accumulate_grad_batches,
-)
-# trainer = pl.Trainer(gpus=config.device, max_epochs=config.epochs)
-trainer.fit(model, train_loader)
-model.eval()
-
-image = nib.load(config.image_path)
-data = image.get_fdata()
-if config.dim_in == 2:
-    data = data[:, :, int(data.shape[2] / 2)]
-pred = torch.concat(trainer.predict(model, test_loader))
-
-if config.dim_in == 3:
-    output = pred.cpu().detach().numpy().reshape(data.shape)
-    nib.save(
-        nib.Nifti1Image(output, affine=np.eye(4)), filepath + "training_result.nii.gz"
-    )
-    ground_truth = nib.load(config.image_path).get_fdata()
-    ground_truth = (ground_truth - np.min(ground_truth)) / np.max(
-        ground_truth
-    ) - np.min(ground_truth)
-    nib.save(
-        nib.Nifti1Image(nib.load(config.image_path).get_fdata(), affine=np.eye(4)),
-        filepath + "ground_truth.nii.gz",
-    )
-if config.dim_in == 2:
-    output = pred.cpu().detach().numpy().reshape((data.shape[0], data.shape[1]))
-    fig, axes = plt.subplots(1, 2)
-    diff = data - output
-    axes[0].imshow(output)
-    axes[1].imshow(data)
-    fig.suptitle("Standard training")
-    axes[0].set_title("Prediction")
-    axes[1].set_title("Ground truth")
-    plt.savefig(filepath + "training_result_standart.png")
-    plt.clf()
-
-    plt.imshow(diff)
-    plt.savefig(filepath + "difference.png")
-
-config.export_to_txt(file_path=filepath)
+    return losses[-1]
+                
+study = optuna.create_study(direction='minimize', study_name=study_name, storage=storage_name, load_if_exists=True)
+study.optimize(objective, n_trials=10000)
