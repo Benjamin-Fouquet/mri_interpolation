@@ -39,6 +39,8 @@ from models import HashSirenNet, ModulatedSirenNet, PsfSirenNet, SirenNet, HashM
 from torchsummary import summary
 from skimage import metrics
 import time
+import sys
+from config import base
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -65,44 +67,7 @@ if __name__ == "__main__":
 with open("config/hash_config.json") as f:
     enco_config = json.load(f)
 
-@dataclass
-class Config:
-    checkpoint_path = ""
-    batch_size: int = 16777216 // 30 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 100
-    num_workers: int = os.cpu_count()
-    # num_workers:int = 0
-    device = [0] if torch.cuda.is_available() else []
-    # device = []
-    accumulate_grad_batches: Dict = None
-    image_path: str = "data/t2_256cube.nii.gz"
-    image_shape = nib.load(image_path).shape
-    coordinates_spacing: np.array = np.array(
-        (2 / image_shape[0], 2 / image_shape[1], 2 / image_shape[2])
-    )
-
-    # Network parameters
-    dim_in: int = 3
-    dim_hidden: int = 256
-    dim_out: int = 1
-    num_layers: int = 5
-    n_sample: int = 3
-    w0: float = 30.0
-    w0_initial: float = 30.0
-    use_bias: bool = True
-    final_activation = None
-    lr: float = 1e-4  # G requires training with a custom lr, usually lr * 0.1
-    datamodule: pl.LightningDataModule = MriDataModule
-    model_cls: pl.LightningModule = ModulatedSirenNet
-
-    comment: str = ""
-
-    def export_to_txt(self, file_path: str = "") -> None:
-        with open(file_path + "config.txt", "w") as f:
-            for key in self.__dict__:
-                f.write(str(key) + " : " + str(self.__dict__[key]) + "\n")
-
-config = Config()
+config = base.BaseConfig()
 
 # parsed argument -> config
 for key in args.__dict__:
@@ -155,7 +120,8 @@ trainer = pl.Trainer(
     gpus=config.device,
     max_epochs=config.epochs,
     accumulate_grad_batches=config.accumulate_grad_batches,
-    precision=16
+    precision=16,
+    # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
 )
 # trainer = pl.Trainer(gpus=config.device, max_epochs=config.epochs)
 trainer.fit(model, train_loader)
@@ -198,9 +164,9 @@ ground_truth = (data - np.max(data)) / (np.min(data) - np.max(data)) * 2 - 1
 
 # metrics
 with open(filepath + "scores.txt", "w") as f:
-    f.write("MSE : " + str(metrics.mean_squared_error(ground_truth, pred)) + "\n")
-    f.write("PSNR : " + str(metrics.peak_signal_noise_ratio(ground_truth, pred)) + "\n")
-    f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, pred)) + "\n")
+    f.write("MSE : " + str(metrics.mean_squared_error(ground_truth, output)) + "\n")
+    f.write("PSNR : " + str(metrics.peak_signal_noise_ratio(ground_truth, output)) + "\n")
+    f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, output)) + "\n")
     f.write(
         "training time  : " + str(training_stop - training_start) + " seconds" + "\n"
     )
