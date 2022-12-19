@@ -134,18 +134,12 @@ class MriImage(Dataset):
         else:
             image = nib.load(config.image_path)
         image = image.get_fdata(dtype=np.float32)  # [64:192, 64:192, 100:164]
-        if config.dim_in == 3:
-            x = torch.linspace(0, 1, steps=image.shape[0])
-            y = torch.linspace(0, 1, steps=image.shape[1])
-            z = torch.linspace(0, 1, steps=image.shape[2])
-            # x = torch.linspace(-1, 1, steps=image.shape[0])
-            # y = torch.linspace(-1, 1, steps=image.shape[1])
-            # z = torch.linspace(-1, 1, steps=image.shape[2])
-            mgrid = torch.stack(torch.meshgrid(x, y, z), dim=-1)
-        if config.dim_in == 2:
-            x = torch.linspace(-1, 1, steps=image.shape[0])
-            y = torch.linspace(-1, 1, steps=image.shape[1])
-            mgrid = torch.stack(torch.meshgrid(x, y), dim=-1)
+
+        axes = []
+        for s in image.shape:
+            axes.append(torch.linspace(-1, 1, s))
+
+        mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 
         # create data tensors
         pixels = torch.FloatTensor(image)
