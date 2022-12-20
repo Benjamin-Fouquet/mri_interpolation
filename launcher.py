@@ -85,21 +85,38 @@ if args.model_class is not None:
         raise ValueError
 
 training_start = time.time()
-###################
+####################
 # MODEL DECLARATION#
-###################
-model = config.model_cls(
-    dim_in=config.dim_in,
-    dim_hidden=config.dim_hidden,
-    dim_out=config.dim_out,
-    num_layers=config.num_layers,
-    w0=config.w0,
-    w0_initial=config.w0_initial,
-    use_bias=config.use_bias,
-    final_activation=config.final_activation,
-    lr=config.lr,
-    config=enco_config,
-)
+####################
+if config.checkpoint_path:
+    model= config.model_cls().load_from_checkpoint(
+        config.checkpoint_path, 
+        dim_in=config.dim_in,
+        dim_hidden=config.dim_hidden,
+        dim_out=config.dim_out,
+        num_layers=config.num_layers,
+        w0=config.w0,
+        w0_initial=config.w0_initial,
+        use_bias=config.use_bias,
+        final_activation=config.final_activation,
+        lr=config.lr,
+        config=enco_config
+        )
+
+else:
+
+    model = config.model_cls(
+        dim_in=config.dim_in,
+        dim_hidden=config.dim_hidden,
+        dim_out=config.dim_out,
+        num_layers=config.num_layers,
+        w0=config.w0,
+        w0_initial=config.w0_initial,
+        use_bias=config.use_bias,
+        final_activation=config.final_activation,
+        lr=config.lr,
+        config=enco_config,
+    )
 
 ########################
 # DATAMODULE DECLARATION#
@@ -119,7 +136,7 @@ test_loader = datamodule.test_dataloader()
 trainer = pl.Trainer(
     gpus=config.device,
     max_epochs=config.epochs,
-    accumulate_grad_batches=config.accumulate_grad_batches,
+    accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
     precision=16,
     # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
 )
@@ -136,7 +153,7 @@ if config.dim_in == 2:
     data = data[:, :, int(data.shape[2] / 2)]
 pred = torch.concat(trainer.predict(model, test_loader))
 
-if config.dim_in == 3:
+if config.dim_in > 2:
     output = pred.cpu().detach().numpy().reshape(data.shape)
     if output.dtype == 'float16':
         output = np.array(output, dtype=np.float32)
@@ -166,7 +183,8 @@ ground_truth = (data - np.max(data)) / (np.min(data) - np.max(data)) * 2 - 1
 with open(filepath + "scores.txt", "w") as f:
     f.write("MSE : " + str(metrics.mean_squared_error(ground_truth, output)) + "\n")
     f.write("PSNR : " + str(metrics.peak_signal_noise_ratio(ground_truth, output)) + "\n")
-    f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, output)) + "\n")
+    if config.dim_in < 4:
+        f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, output)) + "\n")
     f.write(
         "training time  : " + str(training_stop - training_start) + " seconds" + "\n"
     )
