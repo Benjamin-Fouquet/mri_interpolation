@@ -27,7 +27,7 @@ import torch
 from torch import nn
 from torch.autograd import Variable
 from torch.nn import functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 import torchvision
 from einops import rearrange
@@ -143,12 +143,9 @@ class MriImage(Dataset):
 
         # create data tensors
         pixels = torch.FloatTensor(image)
-        if config.dim_in == 2:
-            pixels = pixels[:, :, int(pixels.shape[2] / 2)]
         pixels = pixels.flatten()
         # normalisation, should be recasted with torch reshape func
         pixels = ((pixels - torch.min(pixels)) / torch.max(pixels)) * 2 - 1
-        # pixels = ((pixels - torch.min(pixels)) / torch.max(pixels))
         coords = torch.FloatTensor(mgrid)
         coords = coords.reshape(len(pixels), config.dim_in)
         assert len(coords) == len(pixels)
@@ -213,6 +210,25 @@ class MriDataModule(pl.LightningDataModule):
             batch_size=self.config.batch_size,
             num_workers=self.config.num_workers,
         )
+
+    def upsampling(self, shape, batch_size):
+        '''
+        Returns a mock loader for upsampling using implicit representation
+        '''
+        axes = []
+        for s in shape:
+            axes.append(torch.linspace(-1, 1, s))
+
+        mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+        fake_pix = torch.zeros(np.product(shape))
+        coords = torch.FloatTensor(mgrid)
+        coords = coords.reshape(len(fake_pix), len(shape))
+        assert len(coords) == len(fake_pix)
+        fake_pix = fake_pix.unsqueeze(-1)
+        return DataLoader(TensorDataset(coords, fake_pix), batch_size=batch_size, shuffle=False, num_workers=os.cpu_count())
+
+
+
 
 
 # #crude tests, with test_configs
