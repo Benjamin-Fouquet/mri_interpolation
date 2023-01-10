@@ -1,8 +1,10 @@
 """
 TODO:
 -fetch convolutional models
+-base class with optimizer and so so that you dont have repeating code
 """
 import math
+from typing import Any
 
 import pytorch_lightning as pl
 import torch
@@ -276,7 +278,7 @@ class FourrierNet(pl.LightningModule):
         return self(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
         return optimizer
 
     def set_parameters(self, theta):
@@ -508,7 +510,7 @@ class ModulatedSirenNet(pl.LightningModule):
         return self.siren.last_layer(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
         return optimizer
 
     def training_step(self, batch, batch_idx):
@@ -598,7 +600,7 @@ class HashSirenNet(pl.LightningModule):
         return self.siren.last_layer(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
         return optimizer
 
     def training_step(self, batch, batch_idx):
@@ -636,14 +638,14 @@ class HashMLP(pl.LightningModule):
         self.losses =[]
 
         self.encoding = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
-        self.mlp= tcnn.Network(n_input_dims=self.config["encoding"]["n_levels"] * self.config["encoding"]["n_features_per_level"], n_output_dims=dim_out, network_config=config['network'])
+        self.mlp= tcnn.Network(n_input_dims=self.encoding.n_output_dims, n_output_dims=dim_out, network_config=config['network'])
         self.model = torch.nn.Sequential(self.encoding, self.mlp)
 
     def forward(self, x):
         return self.model(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
         return optimizer
 
     def training_step(self, batch, batch_idx):
@@ -659,3 +661,71 @@ class HashMLP(pl.LightningModule):
     def predict_step(self, batch, batch_idx):
         x, y = batch
         return self(x)
+
+class MultiHashMLP(pl.LightningModule):
+    '''
+    Lightning module for MultiHashMLP. Each 
+    '''
+    def __init__(
+        self,
+        dim_in,
+        dim_out,
+        n_frames,
+        config,
+        lr,
+        *args,
+        **kwargs
+    ):
+        super().__init__()
+        self.config = config
+        self.dim_in = dim_in
+        self.dim_out = dim_out
+        self.n_frames = n_frames
+        self.lr = lr
+        self.losses =[]
+
+        self.encoders = nn.ModuleList()
+        for _ in range(self.n_frames):
+            self.encoders.append(tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding']))
+        self.decoder= tcnn.Network(n_input_dims=self.config["encoding"]["n_levels"] * self.config["encoding"]["n_features_per_level"], n_output_dims=dim_out, network_config=config['network'])
+
+
+        self.automatic_optimization = False
+
+    def forward(self, x):
+        return self.model(x)
+
+    def configure_optimizers(self):
+        self.enc_optimizers = []
+        for i in range(self.n_frames):
+            optimizer = torch.optim.Adam(self.encoders[i].parameters(), lr=self.lr ,weight_decay=1e-5)
+            self.enc_optimizers.append(optimizer)
+
+        self.dec_optimizer = torch.optim.Adam(self.decoder.parameters(), lr=self.lr ,weight_decay=1e-5)       
+        return self.enc_optimizers, self.dec_optimizer 
+
+    def training_step(self, batch, batch_idx):
+        x, y, frame_idx = batch
+        lat = self.encoders[frame_idx] #pred, model(x)
+        z = self.decoder(lat)
+        self.enc_optimizers[frame_idx].zero_grad()
+        self.dec_optimizer.zero_grad()
+        loss = F.mse_loss(z, y)
+        self.manual_backward(loss)
+        #how to be frame dependant?
+        self.enc_optimizers[frame_idx].step()
+        self.dec_optimizer.step()
+
+        self.losses.append(loss.detach().cpu().numpy())
+
+        self.log("train_loss", loss)
+        return loss
+
+    def predict_step(self, batch, batch_idx):
+        '''
+        TODO: adapt for frame adaptive.
+        '''
+        x, y = batch
+        return self(x)
+
+

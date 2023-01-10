@@ -179,6 +179,24 @@ config.export_to_txt(file_path=filepath)
 
 ground_truth = (data - np.max(data)) / (np.min(data) - np.max(data)) * 2 - 1
 
+# #space upscaling
+# up_shape = (600, 600, 6, 15)
+# loader = datamodule.upsampling(batch_size=100000, shape=up_shape)
+# upsample = torch.concat(trainer.predict(model, loader))
+# upsample = upsample.cpu().detach().numpy().reshape(up_shape)
+# if upsample.dtype == 'float16':
+#     upsample = np.array(upsample, dtype=np.float32)
+# nib.save(nib.Nifti1Image(upsample, affine=np.eye(4)), filepath + "upsample_space.nii.gz")
+
+# #temporal upscaling
+# up_shape = (352, 352, 6, 60)
+# loader = datamodule.upsampling(batch_size=100000, shape=up_shape)
+# upsample = torch.concat(trainer.predict(model, loader))
+# upsample = upsample.cpu().detach().numpy().reshape(up_shape)
+# if upsample.dtype == 'float16':
+#     upsample = np.array(upsample, dtype=np.float32)
+# nib.save(nib.Nifti1Image(upsample, affine=np.eye(4)), filepath + "upsample_time.nii.gz")
+
 # metrics
 with open(filepath + "scores.txt", "w") as f:
     f.write("MSE : " + str(metrics.mean_squared_error(ground_truth, output)) + "\n")
