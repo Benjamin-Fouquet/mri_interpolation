@@ -692,8 +692,10 @@ class MultiHashMLP(pl.LightningModule):
 
         self.automatic_optimization = False
 
-    def forward(self, x):
-        return self.model(x)
+    def forward(self, x, frame_idx):
+        lat =self.encoders[frame_idx](x)
+        z = self.decoder(lat)
+        return z.float()
 
     def configure_optimizers(self):
         self.enc_optimizers = []

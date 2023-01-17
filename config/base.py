@@ -3,8 +3,8 @@ import pytorch_lightning as pl
 import torch
 import os
 import nibabel as nib
-from datamodules import MriDataModule, MNISTDataModule
-from models import HashSirenNet, SirenNet, ModulatedSirenNet
+from datamodules import MriDataModule, MNISTDataModule, MriFramesDataModule
+from models import HashSirenNet, SirenNet, ModulatedSirenNet, HashMLP, MultiHashMLP
 from dataclasses import dataclass, field
 from typing import Any, Dict, Tuple, Union, FrozenSet, List
 from types import MappingProxyType
@@ -13,13 +13,15 @@ import importlib
 
 @dataclass
 class BaseConfig:
-    checkpoint_path = ""
-    batch_size: int = 16777216 // 100  # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 10
+    checkpoint_path = None
+    batch_size: int = 1 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 500
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
-    accumulate_grad_batches: MappingProxyType = None
-    image_path: str = "data/t2_111.nii.gz"
+    accumulate_grad_batches: MappingProxyType = None #MappingProxyType({200: 2}) #MappingProxyType({0: 5})
+    # image_path: str = 'data/equinus_downsampled.nii.gz'
+    # image_path: str = '/home/aorus-users/Benjamin/git_repos/mri_interpolation/data/equinus_sameframes.nii.gz'
+    image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
     coordinates_spacing: np.array = np.array(
         (2 / image_shape[0], 2 / image_shape[1], 2 / image_shape[2])
@@ -27,8 +29,8 @@ class BaseConfig:
     hashconfig_path: str = 'config/hash_config.json'
 
     # Network parameters
-    dim_in: int = 3
-    dim_hidden: int = 256
+    dim_in: int = 4
+    dim_hidden: int = 64
     dim_out: int = 1
     num_layers: int = 5
     n_sample: int = 3
@@ -36,19 +38,20 @@ class BaseConfig:
     w0_initial: float = 30.0
     use_bias: bool = True
     final_activation = None
-    lr: float = 1e-4  # G requires training with a custom lr, usually lr * 0.1
-    datamodule: pl.LightningDataModule = MriDataModule
-    model_cls: pl.LightningModule = HashSirenNet
+    lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1
+    # datamodule: pl.LightningDataModule = MriFramesDataModule
+    # model_cls: pl.LightningModule = MultiHashMLP  
+    datamodule: pl.LightningDataModule = MriFramesDataModule
+    model_cls: pl.LightningModule = MultiHashMLP  
+    n_frames: int = 15
 
-    comment: str = ""
-
-    # output
-    output_path: str = "results_hash/"
-    if os.path.isdir(output_path) is False:
-        os.mkdir(output_path)
-    experiment_number: int = 0 if len(os.listdir(output_path)) == 0 else len(
-        os.listdir(output_path)
-    )
+    # # output
+    # output_path: str = "results_hash/"
+    # if os.path.isdir(output_path) is False:
+    #     os.mkdir(output_path)
+    # experiment_number: int = 0 if len(os.listdir(output_path)) == 0 else len(
+    #     os.listdir(output_path)
+    # )
 
     def export_to_txt(self, file_path: str = "") -> None:
         with open(file_path + "config.txt", "w") as f:
@@ -88,8 +91,6 @@ class MNISTConfig:
     conv_channels: tuple = (8, 8, 8,)
     datamodule: pl.LightningDataModule = MNISTDataModule
     accum: MappingProxyType = MappingProxyType({200: 3, 400: 4})
-
-    comment: str = "Siren training on high res, to be used for psf training"
 
     # output
     output_path: str = "results_fourrier/"

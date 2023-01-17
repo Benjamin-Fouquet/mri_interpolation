@@ -177,7 +177,7 @@ if config.dim_in == 2:
 
 config.export_to_txt(file_path=filepath)
 
-ground_truth = (data - np.max(data)) / (np.min(data) - np.max(data)) * 2 - 1
+ground_truth = (data / np.max(data))  * 2 - 1
 
 # #space upscaling
 # up_shape = (600, 600, 6, 15)

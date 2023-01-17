@@ -33,7 +33,6 @@ import torchvision
 from einops import rearrange
 from utils import create_rn_mask
 
-
 def display_output(batch):
     x, y = batch
     x = x.squeeze()
@@ -172,6 +171,7 @@ class MriDataModule(pl.LightningDataModule):
         self.config = config
 
     def prepare_data(self) -> None:
+        # self.dataset = MriImage(config=self.config)
         self.dataset = MriImage(config=self.config)
         # self.mean_dataset = MriImage(config=self.config, image_path='data/mean.nii.gz') #how to set mean without screwing up ?
         self.train_ds = self.dataset
@@ -227,9 +227,145 @@ class MriDataModule(pl.LightningDataModule):
         fake_pix = fake_pix.unsqueeze(-1)
         return DataLoader(TensorDataset(coords, fake_pix), batch_size=batch_size, shuffle=False, num_workers=os.cpu_count())
 
+###
+#multi frame dataset et datamodule, for MultiHash especially#
+###
+class MriFrames(Dataset):
+    '''
+    One batch is one frame, ordered ? Check if index matches frame
+    '''
+    def __init__(self, config, image_path=None, *args, **kwargs):
+        super().__init__()
+        if image_path:
+            image = nib.load(image_path)
+        else:
+            image = nib.load(config.image_path)
+        self.image = image.get_fdata(dtype=np.float32)  # [64:192, 64:192, 100:164]
+
+        axes = []
+        for s in self.image.shape:
+            axes.append(torch.linspace(-1, 1, s))
+
+        mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+        # create data tensors
+        pixels = torch.FloatTensor(self.image)
+        pixels = pixels.reshape(-1, self.image.shape[-1], 1)
+        # normalisation, should be recasted with torch reshape func
+        pixels = ((pixels - torch.min(pixels)) / torch.max(pixels)) * 2 - 1
+        coords = torch.FloatTensor(mgrid)
+        coords = coords.reshape(len(pixels), config.dim_in, self.image.shape[-1])
+        assert len(coords) == len(pixels)
+        self.coords = coords
+        self.pixels = pixels
+
+    def __len__(self):
+        return self.image.shape[-1]
+
+    def __getitem__(self, idx):
+        return self.coords[:,:,idx], self.pixels[:,idx], idx
+
+class MockMriFrames(Dataset):
+    '''
+    used for upsampling
+    '''
+    def __init__(self, config, shape, *args, **kwargs):
+        super().__init__()
+        self.shape = shape
+        axes = []
+        for s in shape:
+            axes.append(torch.linspace(-1, 1, s))
+
+        mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+        # create data tensors
+        # pixels = torch.FloatTensor(self.image)
+        pixels = torch.ones(np.prod(shape))
+        pixels = pixels.reshape(-1, shape[-1], 1)
+
+        coords = torch.FloatTensor(mgrid)
+        coords = coords.reshape(len(pixels), config.dim_in, shape[-1])
+        assert len(coords) == len(pixels)
+        self.coords = coords
+        self.pixels = pixels
+
+    def __len__(self):
+        return self.shape[-1]
+
+    def __getitem__(self, idx):
+        return self.coords[:,:,idx], self.pixels[:,idx], idx
 
 
+class MriFramesDataModule(pl.LightningDataModule):
+    """
+    Take ONE mri image and returns coords and pixels, no split on train/val/test for the moment
+    """
 
+    def __init__(self, config=None, *args, **kwargs):
+        super().__init__()
+        self.train_ds = None
+        self.val_ds = None
+        self.test_ds = None
+        self.config = config
+
+    def prepare_data(self) -> None:
+        # self.dataset = MriImage(config=self.config)
+        self.dataset = MriFrames(config=self.config)
+        # self.mean_dataset = MriImage(config=self.config, image_path='data/mean.nii.gz') #how to set mean without screwing up ?
+        self.train_ds = self.dataset
+        self.test_ds = self.dataset
+        self.val_ds = self.dataset
+
+    def setup(self, normalisation: str = "zero centered"):
+        pass
+
+    def train_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self.train_ds,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            shuffle=True,
+        )
+
+    def val_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self.val_ds,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+        )
+
+    def test_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self.test_ds,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            shuffle=False,
+        )
+
+    def mean_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self.mean_dataset,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+        )
+
+    def upsampling(self, shape):
+        '''
+        Returns a mock loader for upsampling using implicit representation
+        '''
+        upsampled_ds = MockMriFrames(config=self.config, shape=shape)
+        return DataLoader(
+            upsampled_ds,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            shuffle=False,
+        )
+
+# set = MriFrames(config=config)
+
+# dm = MriDataModule(config)
+# dm.prepare_data()
+# dm.setup()
+# loader = dm.train_dataloader()
+# batch = next(iter(loader))
 
 # #crude tests, with test_configs
 # if __name__ == 'main':
