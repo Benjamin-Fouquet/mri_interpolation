@@ -1,5 +1,5 @@
 """
-Training loops and outputs
+Training loops and outputs for meta learning
 
 TODO:
 -3D outputs

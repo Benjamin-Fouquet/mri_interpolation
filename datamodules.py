@@ -34,6 +34,13 @@ from einops import rearrange
 from utils import create_rn_mask
 
 def display_output(batch):
+    '''
+    Small KOL function for visualising MNIST
+    Args:
+        batch(tuple of tensors): x is coordinates, y is intensity
+    Returns:
+        None, visu only
+    '''
     x, y = batch
     x = x.squeeze()
     y = y.squeeze()
@@ -43,6 +50,10 @@ def display_output(batch):
 
 
 class MNISTDataModule(pl.LightningDataModule):
+    '''
+    Datamodule for implicit representation training based on MNIST dataset
+    loader returns coordinates (-1, 1) as x and intensity as y
+    '''
     def __init__(self, config=None):
         super().__init__()
         self.config = config
@@ -126,6 +137,11 @@ class MNISTDataModule(pl.LightningDataModule):
 
 
 class MriImage(Dataset):
+    '''
+    Dataset for implicit representation training. 
+    coordinates are returned in x
+    Intensity is returned in y
+    '''
     def __init__(self, config, image_path=None, *args, **kwargs):
         super().__init__()
         if image_path:
@@ -232,7 +248,12 @@ class MriDataModule(pl.LightningDataModule):
 ###
 class MriFrames(Dataset):
     '''
-    One batch is one frame, ordered ? Check if index matches frame
+    Dataset for implicit representation training. 
+    coordinates are returned in x
+    Intensity is returned in y
+
+    One batch is one frame, as batches need to be labeled with the proper index
+
     '''
     def __init__(self, config, image_path=None, *args, **kwargs):
         super().__init__()
@@ -266,7 +287,7 @@ class MriFrames(Dataset):
 
 class MockMriFrames(Dataset):
     '''
-    used for upsampling
+    Moch dataset used for data upsampling after training
     '''
     def __init__(self, config, shape, *args, **kwargs):
         super().__init__()

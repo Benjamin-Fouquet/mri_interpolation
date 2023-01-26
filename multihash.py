@@ -42,6 +42,7 @@ import time
 import sys
 from config import base
 
+
 torch.manual_seed(1337)
 
 filepath = 'results/multi_hash/'
@@ -136,7 +137,12 @@ test_loader = datamodule.test_dataloader()
 
 model.to('cuda')
 
-optimizer = torch.optim.Adam(model.parameters(), lr=config.lr ,weight_decay=1e-5)       
+enc_optimizers = []
+for i in range(config.n_frames):
+    optimizer = torch.optim.Adam(model.encoders[i].parameters(), lr=config.lr ,weight_decay=1e-5)
+    enc_optimizers.append(optimizer)
+
+dec_optimizer = torch.optim.Adam(model.decoder.parameters(), lr=config.lr ,weight_decay=1e-5)       
 
 losses = []
 
@@ -162,10 +168,12 @@ for epoch in range(config.epochs):
         print("train loss: ", loss.item())
         losses.append(loss.detach().cpu().numpy())
 
-        optimizer.zero_grad()
+        enc_optimizers[frame_idx].zero_grad()
+        dec_optimizer.zero_grad()
 
         loss.backward()
-        optimizer.step()
+        enc_optimizers[frame_idx].step()
+        dec_optimizer.step()
 
 
 training_stop = time.time()
@@ -262,4 +270,62 @@ with open(filepath + "scores.txt", "w") as f:
     f.write("Max memory allocated : " + str(torch.cuda.max_memory_allocated()) + "\n")
 
 nib.save(nib.Nifti1Image((ground_truth - output), affine=gt_image.affine), filepath + 'difference.nii.gz')
+
+# #space upscaling
+# up_shape = (600, 600, 6, 15)
+# loader = datamodule.upsampling(shape=up_shape)
+# upsample = torch.zeros(1, 1)
+# for batch in loader:
+#     x, y, frame_idx = batch
+#     x = x.to("cuda").squeeze(0)
+#     upsample = torch.cat((upsample, model(x, frame_idx).detach().cpu()))
+
+
+# image = np.zeros(up_shape)
+# upsample = upsample[1:, ...].numpy()
+# upsample= np.array(upsample, dtype=np.float32)
+# for i in range(config.n_frames):
+#     im = upsample[np.prod(up_shape[0:3]) * i: np.prod(up_shape[0:3]) * (i+1), :]
+#     im = im.reshape(up_shape[0:3])
+#     image[..., i] = im
+
+# nib.save(nib.Nifti1Image(image, affine=ground_truth.affine, header=ground_truth.header), "out_upspatial_multihash.nii.gz") #file_map = ground_truth.file_map
+
+# #temporal upscaling, not possible due to indexing of encoders
+# up_shape = (352, 352, 6, 60)
+# loader = datamodule.upsampling(shape=up_shape)
+# upsample = torch.zeros(1, 1)
+# for batch in loader:
+#     x, y, frame_idx = batch
+#     x = x.to("cuda").squeeze(0)
+#     upsample = torch.cat((upsample, model(x, frame_idx).detach().cpu()))
+
+
+# image = np.zeros(up_shape)
+# upsample = upsample[1:, ...].numpy()
+# upsample= np.array(upsample, dtype=np.float32)
+# for i in range(config.n_frames):
+#     im = upsample[np.prod(up_shape[0:3]) * i: np.prod(up_shape[0:3]) * (i+1), :]
+#     im = im.reshape(up_shape[0:3])
+#     image[..., i] = im
+
+# nib.save(nib.Nifti1Image(image, affine=ground_truth.affine, header=ground_truth.header), "out_uptemporal_multihash.nii.gz") #file_map = ground_truth.file_map
+
+'''
+print('pouet')
+
+#load both images
+gt_image = nib.load('/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz')
+pred = nib.load('lightning_logs/version_232/training_result.nii.gz')
+
+ground_truth = gt_image.get_fdata()
+ground_truth = ground_truth / np.max(ground_truth) * 2 - 1
+output = pred.get_fdata()
+
+with open("scores_per_frame_sameNet.txt", "w") as f:
+    for i in range(gt_image.shape[-1]):
+        f.write(f"PSNR_{i} : " + str(metrics.peak_signal_noise_ratio(ground_truth[:,:,:,i], output[:,:,:,i])) + "\n")
+
+'''
+
 

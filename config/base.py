@@ -4,7 +4,7 @@ import torch
 import os
 import nibabel as nib
 from datamodules import MriDataModule, MNISTDataModule, MriFramesDataModule
-from models import HashSirenNet, SirenNet, ModulatedSirenNet, HashMLP, MultiHashMLP
+from models import HashSirenNet, SirenNet, ModulatedSirenNet, HashMLP, MultiHashMLP, MultiSiren
 from dataclasses import dataclass, field
 from typing import Any, Dict, Tuple, Union, FrozenSet, List
 from types import MappingProxyType
@@ -14,8 +14,8 @@ import importlib
 @dataclass
 class BaseConfig:
     checkpoint_path = None
-    batch_size: int = 1 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 500
+    batch_size: int = 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 300
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None #MappingProxyType({200: 2}) #MappingProxyType({0: 5})
@@ -32,17 +32,17 @@ class BaseConfig:
     dim_in: int = 4
     dim_hidden: int = 64
     dim_out: int = 1
-    num_layers: int = 5
+    num_layers: int = 6
     n_sample: int = 3
-    w0: float = 30.0
-    w0_initial: float = 30.0
+    w0: float = 25.0
+    w0_initial: float = 25.0
     use_bias: bool = True
     final_activation = None
-    lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1
-    # datamodule: pl.LightningDataModule = MriFramesDataModule
-    # model_cls: pl.LightningModule = MultiHashMLP  
+    lr: float = 1e-4  # G requires training with a custom lr, usually lr * 0.1
+    # datamodule: pl.LightningDataModule = MriDataModule
+    # model_cls: pl.LightningModule = HashMLP  
     datamodule: pl.LightningDataModule = MriFramesDataModule
-    model_cls: pl.LightningModule = MultiHashMLP  
+    model_cls: pl.LightningModule = MultiSiren  
     n_frames: int = 15
 
     # # output

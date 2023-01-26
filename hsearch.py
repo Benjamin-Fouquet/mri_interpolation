@@ -1,3 +1,7 @@
+'''
+Hyperparameters search using optuna
+'''
+
 import torch
 from torch.nn import functional as F
 import pytorch_lightning as pl

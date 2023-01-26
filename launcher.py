@@ -34,13 +34,16 @@ from torch.nn import functional as F
 
 from datamodules import MriDataModule
 from einops import rearrange
-from models import HashSirenNet, ModulatedSirenNet, PsfSirenNet, SirenNet, HashMLP
+from models import HashSirenNet, ModulatedSirenNet, PsfSirenNet, SirenNet, HashMLP, MultiSiren
 # import functorch
 from torchsummary import summary
 from skimage import metrics
 import time
 import sys
 from config import base
+import glob
+
+torch.manual_seed(1337)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -116,11 +119,13 @@ else:
         final_activation=config.final_activation,
         lr=config.lr,
         config=enco_config,
+        n_frames=config.n_frames
     )
 
-########################
+#########################
 # DATAMODULE DECLARATION#
-########################
+#########################
+
 datamodule = config.datamodule(config=config)
 datamodule.prepare_data()
 datamodule.setup()
@@ -153,13 +158,25 @@ if config.dim_in == 2:
     data = data[:, :, int(data.shape[2] / 2)]
 pred = torch.concat(trainer.predict(model, test_loader))
 
-if config.dim_in > 2:
+if config.dim_in == 3:
     output = pred.cpu().detach().numpy().reshape(data.shape)
     if output.dtype == 'float16':
         output = np.array(output, dtype=np.float32)
     nib.save(
         nib.Nifti1Image(output, affine=np.eye(4)), filepath + "training_result.nii.gz"
     )
+if config.dim_in == 4:
+    output = np.zeros(config.image_shape)
+    pred = pred.numpy()
+    pred= np.array(pred, dtype=np.float32)
+    for i in range(config.n_frames):
+        im = pred[np.prod(config.image_shape[0:3]) * i: np.prod(config.image_shape[0:3]) * (i+1), :]
+        im = im.reshape(config.image_shape[0:3])
+        output[..., i] = im
+    nib.save(
+        nib.Nifti1Image(output, affine=np.eye(4)), filepath + "training_result.nii.gz"
+    )
+
 if config.dim_in == 2:
     output = pred.cpu().detach().numpy().reshape((data.shape[0], data.shape[1]))
     fig, axes = plt.subplots(1, 2)
@@ -201,8 +218,8 @@ ground_truth = (data / np.max(data))  * 2 - 1
 with open(filepath + "scores.txt", "w") as f:
     f.write("MSE : " + str(metrics.mean_squared_error(ground_truth, output)) + "\n")
     f.write("PSNR : " + str(metrics.peak_signal_noise_ratio(ground_truth, output)) + "\n")
-    if config.dim_in < 4:
-        f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, output)) + "\n")
+    # if config.dim_in < 4:
+    #     f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, output)) + "\n")
     f.write(
         "training time  : " + str(training_stop - training_start) + " seconds" + "\n"
     )
@@ -212,3 +229,6 @@ with open(filepath + "scores.txt", "w") as f:
         + "\n"
     )  # remove condition if you want total parameters
     f.write("Max memory allocated : " + str(torch.cuda.max_memory_allocated()) + "\n")
+
+#difference between gt and pred as an image
+nib.save(nib.Nifti1Image((ground_truth - output), affine=image.affine), filepath + 'difference.nii.gz')
