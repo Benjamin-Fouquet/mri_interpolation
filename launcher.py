@@ -1,9 +1,7 @@
 """
-Barebone laucnher for tests
+Launcher for trainings using datamodules and models
 
 TODO:
--workers and device in conf OR include directly into class. prob if too many workers
--correct config
 -normalisation is repeated and clunky, solve.
 """
 

@@ -4,7 +4,6 @@ Data options:
 -MNIST for tests
 -DHCP for real deal
 -potentially fabien and/or foetal to be added lated
--Also, write tests for datamodules ?
 TODO:
 -normalisation is manual and hardcoded, not great
 """

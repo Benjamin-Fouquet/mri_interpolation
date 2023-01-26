@@ -1,5 +1,5 @@
 '''
-Script for creating a mean image from a set of mri
+Script for creating a mean image from a set of mri, used for optimal initialization.
 '''
 
 import glob
