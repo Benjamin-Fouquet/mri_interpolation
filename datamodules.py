@@ -342,7 +342,7 @@ class MriFramesDataModule(pl.LightningDataModule):
             self.train_ds,
             batch_size=self.config.batch_size,
             num_workers=self.config.num_workers,
-            shuffle=True,
+            shuffle=False,
         )
 
     def val_dataloader(self) -> DataLoader:
