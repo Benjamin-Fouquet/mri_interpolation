@@ -24,7 +24,7 @@ class LatentDataset(Dataset):
         super().__init__()
 
         assert len(latents_list) > 0, 'Latents_list is empty'
-        self.latents = latents_list
+        self.latents = [torch.HalfTensor(lat) for lat in latents_list]
         self.times = torch.linspace(-1, 1, len(latents_list))
 
     def __len__(self):
@@ -63,12 +63,12 @@ config = SirenConfig()
 
 #build latent list
 lats = []
-lats_path = glob.glob('results/multi_hash/lat*', recursive=True)
+lats_path = glob.glob('results/multi_hash_500/lat*', recursive=True)
 for path in lats_path:
     lats.append(torch.load(path))
 
 dataset = LatentDataset(lats)
-train_loader = DataLoader(dataset=dataset, batch_size=1, shuffle=True, num_workers=os.cpu_count())
+train_loader = DataLoader(dataset=dataset, batch_size=1, shuffle=False, num_workers=os.cpu_count())
 #create loader
 
 #train siren
@@ -98,7 +98,7 @@ with open("config/hash_config.json") as f:
     enco_config = json.load(f)
 
 decoder = tcnn.Network(n_input_dims=enco_config["encoding"]["n_levels"] * enco_config["encoding"]["n_features_per_level"], n_output_dims=1, network_config=enco_config['network'])
-decoder.load_state_dict(torch.load('results/multi_hash/decoder_statedict.pt'))
+decoder.load_state_dict(torch.load('results/multi_hash_500/decoder_statedict.pt'))
 
 t_interp = torch.linspace(-1, 1, 60)
 

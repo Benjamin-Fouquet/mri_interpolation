@@ -40,49 +40,14 @@ from torchsummary import summary
 from skimage import metrics
 import time
 import sys
-from types import MappingProxyType
-from datamodules import MriFramesDataModule
-from models import HashSirenNet, SirenNet, ModulatedSirenNet, HashMLP, MultiHashMLP, MultiSiren
-
-
-
-
-@dataclass
-class BaseConfig:
-    checkpoint_path = None
-    batch_size: int = 1  # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 500
-    num_workers: int = os.cpu_count()
-    device = [0] if torch.cuda.is_available() else []
-    accumulate_grad_batches: MappingProxyType = None #MappingProxyType({200: 2}) #MappingProxyType({0: 5})
-    image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
-    image_shape = nib.load(image_path).shape
-    hashconfig_path: str = 'config/hash_config.json'
-
-    # Network parameters
-    dim_in: int = 4
-    dim_hidden: int = 64
-    dim_out: int = 1
-    num_layers: int = 6
-    n_sample: int = 3
-    w0: float = 30.0
-    w0_initial: float = 30.0
-    use_bias: bool = True
-    final_activation = None
-    lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1
-    datamodule: pl.LightningDataModule = MriFramesDataModule
-    model_cls: pl.LightningModule = MultiHashMLP  
-    n_frames: int = 15
-
-    def export_to_txt(self, file_path: str = "") -> None:
-        with open(file_path + "config.txt", "w") as f:
-            for key in self.__dict__:
-                f.write(str(key) + " : " + str(self.__dict__[key]) + "\n")
+from config import base
 
 
 torch.manual_seed(1337)
 
 filepath = 'results/multi_hash/'
+
+lmbda = 0.5
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -109,7 +74,7 @@ if __name__ == "__main__":
 with open("config/hash_config.json") as f:
     enco_config = json.load(f)
 
-config = BaseConfig()
+config = base.BaseConfig()
 
 # parsed argument -> config
 for key in args.__dict__:
@@ -179,11 +144,13 @@ for i in range(config.n_frames):
     optimizer = torch.optim.Adam(model.encoders[i].parameters(), lr=config.lr ,weight_decay=1e-5)
     enc_optimizers.append(optimizer)
 
-dec_optimizer = torch.optim.Adam(model.decoder.parameters(), lr=config.lr ,weight_decay=1e-5)       
+dec_optimizer = torch.optim.Adam(model.decoder.parameters(), lr=config.lr ,weight_decay=1e-5) 
+
+g_optimizer = torch.optim.Adam(model.parameters(), lr=config.lr ,weight_decay=1e-5) 
 
 losses = []
 
-lats = []
+lats = [i for i in range(config.n_frames)]
 ###############
 # TRAINING LOOP#
 ###############
@@ -194,24 +161,40 @@ for epoch in range(config.epochs):
         x = x.to("cuda").squeeze(0)
         y = y.to("cuda").squeeze(0)
 
+
         lat = model.encoders[frame_idx](x)
-        if epoch == config.epochs - 1:
-            lats.append(lat.detach().cpu().numpy())
+        lats[frame_idx] = lat
+
         z = model.decoder(lat)
         z = z.float()
 
-        loss = F.mse_loss(z, y)
+        # probably fails because lats dont have gradients (they are not leaves !). Try retain_grad in backward. 
+        # Also, small test would be to do loss_a one image domain first to see if thats really the problem. Also, 
+        # could be that its because of lats of other frames intervening in loss calculation and propagation, so you may have to retain all 
+        # (happy memory leak in view)
+        if epoch > 0:
+            if frame_idx < 13:
+                #add lambda
+                loss_a = F.mse_loss(0.5 * lats[frame_idx] + 0.5 * lats[frame_idx + 2], lats[frame_idx + 1])
+                loss_b = F.mse_loss(z, y)
+                # loss = (F.mse_loss((0.5 * lats[frame_idx] + 0.5 * lats[frame_idx + 2]), lats[frame_idx + 1]) +  F.mse_loss(z, y))
+                loss = lmbda * loss_a + (1 - lmbda) * loss_b 
+            else:
+                loss = F.mse_loss(z, y)
+        else:
+            loss = F.mse_loss(z, y)
         print(f"epoch: {epoch}")
         print("train loss: ", loss.item())
         losses.append(loss.detach().cpu().numpy())
 
+        # g_optimizer.zero_grad()
         enc_optimizers[frame_idx].zero_grad()
         dec_optimizer.zero_grad()
 
         loss.backward()
+        # g_optimizer.step()
         enc_optimizers[frame_idx].step()
         dec_optimizer.step()
-
 
 training_stop = time.time()
 
@@ -249,37 +232,37 @@ ground_truth = (data / np.max(data))  * 2 - 1
 
 output = image
 
-# ###############
-# #INTERPOLATION#
-# ###############
-# #create one latent per frame
-# lats = []
-# for batch in test_loader:
-#     x, y, frame_idx = batch
-#     x = x.to("cuda").squeeze(0)
-#     lat = model.encoders[frame_idx](x)
-#     lats.append(lat.detach())
+###############
+#INTERPOLATION#
+###############
+#create one latent per frame
+lats = []
+for batch in test_loader:
+    x, y, frame_idx = batch
+    x = x.to("cuda").squeeze(0)
+    lat = model.encoders[frame_idx](x)
+    lats.append(lat.detach())
 
-# #interp latents at half distance
-# interps = []
-# for i in range(len(lats) - 1):
-#     interps.append(0.5 * lats[i] + 0.5 * lats[i + 1])
+#interp latents at half distance
+interps = []
+for i in range(len(lats) - 1):
+    interps.append(0.5 * lats[i] + 0.5 * lats[i + 1])
 
-# #recontruct using the MLP
-# pred = torch.zeros(1, 1)
-# for interp in interps:
-#     pred = torch.cat((pred, model.decoder(interp).detach().cpu()))
+#recontruct using the MLP
+pred = torch.zeros(1, 1)
+for interp in interps:
+    pred = torch.cat((pred, model.decoder(interp).detach().cpu()))
 
-# #save results
-# image = np.zeros(config.image_shape)
-# pred = pred[1:, ...].numpy()
-# pred= np.array(pred, dtype=np.float32)
-# for i in range(len(interps)):
-#     im = pred[np.prod(config.image_shape[0:3]) * i: np.prod(config.image_shape[0:3]) * (i+1), :]
-#     im = im.reshape(config.image_shape[0:3])
-#     image[..., i] = im
+#save results
+image = np.zeros(config.image_shape)
+pred = pred[1:, ...].numpy()
+pred= np.array(pred, dtype=np.float32)
+for i in range(len(interps)):
+    im = pred[np.prod(config.image_shape[0:3]) * i: np.prod(config.image_shape[0:3]) * (i+1), :]
+    im = im.reshape(config.image_shape[0:3])
+    image[..., i] = im
 
-# nib.save(nib.Nifti1Image(image, affine=gt_image.affine, header=gt_image.header), filepath + "out_interp.nii.gz") 
+nib.save(nib.Nifti1Image(image, affine=gt_image.affine, header=gt_image.header), filepath + "out_interp.nii.gz") 
 
 #Save lats
 for idx, lat in enumerate(lats):
@@ -364,5 +347,3 @@ with open("scores_per_frame_sameNet.txt", "w") as f:
         f.write(f"PSNR_{i} : " + str(metrics.peak_signal_noise_ratio(ground_truth[:,:,:,i], output[:,:,:,i])) + "\n")
 
 '''
-
-

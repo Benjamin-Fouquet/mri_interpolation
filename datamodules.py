@@ -201,7 +201,7 @@ class MriDataModule(pl.LightningDataModule):
             self.train_ds,
             batch_size=self.config.batch_size,
             num_workers=self.config.num_workers,
-            shuffle=True,
+            shuffle=False,
         )
 
     def val_dataloader(self) -> DataLoader:
@@ -242,9 +242,9 @@ class MriDataModule(pl.LightningDataModule):
         fake_pix = fake_pix.unsqueeze(-1)
         return DataLoader(TensorDataset(coords, fake_pix), batch_size=batch_size, shuffle=False, num_workers=os.cpu_count())
 
-###
-#multi frame dataset et datamodule, for MultiHash especially#
-###
+
+
+#multi frame dataset et datamodule, for MultiHash especially
 class MriFrames(Dataset):
     '''
     Dataset for implicit representation training. 

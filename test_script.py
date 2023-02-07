@@ -41,13 +41,22 @@ from skimage import metrics
 import time
 import sys
 from config import base
+import glob
 
+# # #build latent list
+# lats = []
+# lats_path = glob.glob('results/multi_MLP/lat*', recursive=True)
+# for path in lats_path:
+#     lats.append(torch.load(path))
+
+# for idx, lat in enumerate(lats):
+#     lat = lat.reshape(352, 352, 6, 15).cpu().detach().numpy()
+#     lat = np.array(lat, dtype=np.float32)
+#     nib.save(nib.Nifti1Image(lat, affine=np.eye(4)), f'results/latents_visualisation/lat_multiH_MultiMLP_{idx}.nii.gz')
 
 torch.manual_seed(1337)
 
-filepath = 'results/multi_hash/'
-
-lmbda = 0.5
+filepath = 'results/multi_MLP/'
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -92,196 +101,183 @@ if args.model_class is not None:
         raise ValueError
 
 training_start = time.time()
+
+frames_path = glob.glob('data/equinus_frames/frame*', recursive=True)
 ####################
 # MODEL DECLARATION#
 ####################
-if config.checkpoint_path:
-    model= config.model_cls().load_from_checkpoint(
-        config.checkpoint_path, 
-        dim_in=config.dim_in,
-        dim_hidden=config.dim_hidden,
-        dim_out=config.dim_out,
-        num_layers=config.num_layers,
-        w0=config.w0,
-        w0_initial=config.w0_initial,
-        use_bias=config.use_bias,
-        final_activation=config.final_activation,
-        lr=config.lr,
-        config=enco_config
+for idx, path in enumerate(frames_path):
+    config.image_path = path
+
+    if config.checkpoint_path:
+        model= config.model_cls().load_from_checkpoint(
+            config.checkpoint_path, 
+            dim_in=config.dim_in,
+            dim_hidden=config.dim_hidden,
+            dim_out=config.dim_out,
+            num_layers=config.num_layers,
+            w0=config.w0,
+            w0_initial=config.w0_initial,
+            use_bias=config.use_bias,
+            final_activation=config.final_activation,
+            lr=config.lr,
+            config=enco_config
+            )
+
+    else:
+
+        model = config.model_cls(
+            dim_in=config.dim_in,
+            dim_hidden=config.dim_hidden,
+            dim_out=config.dim_out,
+            num_layers=config.num_layers,
+            w0=config.w0,
+            w0_initial=config.w0_initial,
+            use_bias=config.use_bias,
+            final_activation=config.final_activation,
+            lr=config.lr,
+            config=enco_config,
+            n_frames=config.n_frames
         )
 
-else:
+    ########################
+    #DATAMODULE DECLARATION#
+    ########################
+    datamodule = config.datamodule(config=config)
+    datamodule.prepare_data()
+    datamodule.setup()
 
-    model = config.model_cls(
-        dim_in=config.dim_in,
-        dim_hidden=config.dim_hidden,
-        dim_out=config.dim_out,
-        num_layers=config.num_layers,
-        w0=config.w0,
-        w0_initial=config.w0_initial,
-        use_bias=config.use_bias,
-        final_activation=config.final_activation,
-        lr=config.lr,
-        config=enco_config,
-        n_frames=config.n_frames
-    )
+    train_loader = datamodule.train_dataloader()
+    # mean_train_loader = datamodule.mean_dataloader()
+    test_loader = datamodule.test_dataloader()
 
-########################
-# DATAMODULE DECLARATION#
-########################
-datamodule = config.datamodule(config=config)
-datamodule.prepare_data()
-datamodule.setup()
+    model.to('cuda')
 
-train_loader = datamodule.train_dataloader()
-# mean_train_loader = datamodule.mean_dataloader()
-test_loader = datamodule.test_dataloader()
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.lr ,weight_decay=1e-5)       
 
-model.to('cuda')
+    losses = []
 
-enc_optimizers = []
-for i in range(config.n_frames):
-    optimizer = torch.optim.Adam(model.encoders[i].parameters(), lr=config.lr ,weight_decay=1e-5)
-    enc_optimizers.append(optimizer)
+    lats = []
+    ###############
+    # TRAINING LOOP#
+    ###############
+    for epoch in range(config.epochs):
+        # TRAINING LOOP
+        for train_batch in train_loader:
+            x, y = train_batch
+            x = x.to("cuda").squeeze(0)
+            y = y.to("cuda").squeeze(0)
 
-dec_optimizer = torch.optim.Adam(model.decoder.parameters(), lr=config.lr ,weight_decay=1e-5) 
+            lat = model.encoding(x)
+            z = model.mlp(lat)
+            z = z.float()
 
-g_optimizer = torch.optim.Adam(model.parameters(), lr=config.lr ,weight_decay=1e-5) 
-
-losses = []
-
-lats = [i for i in range(config.n_frames)]
-###############
-# TRAINING LOOP#
-###############
-for epoch in range(config.epochs):
-    # TRAINING LOOP
-    for train_batch in train_loader:
-        x, y, frame_idx = train_batch
-        x = x.to("cuda").squeeze(0)
-        y = y.to("cuda").squeeze(0)
-
-
-        lat = model.encoders[frame_idx](x)
-        lats[frame_idx] = lat
-
-        z = model.decoder(lat)
-        z = z.float()
-
-        if epoch > 0:
-            if frame_idx < 13:
-                #add lambda
-                loss_a = F.mse_loss(0.5 * lats[frame_idx] + 0.5 * lats[frame_idx + 2], lats[frame_idx + 1])
-                loss_b = F.mse_loss(z, y)
-                # loss = (F.mse_loss((0.5 * lats[frame_idx] + 0.5 * lats[frame_idx + 2]), lats[frame_idx + 1]) +  F.mse_loss(z, y))
-                loss = lmbda * loss_a + (1 - lmbda) * loss_b 
-            else:
-                loss = F.mse_loss(z, y)
-        else:
             loss = F.mse_loss(z, y)
-        print(f"epoch: {epoch}")
-        print("train loss: ", loss.item())
-        losses.append(loss.detach().cpu().numpy())
+            print(f"epoch: {epoch}")
+            print("train loss: ", loss.item())
+            losses.append(loss.detach().cpu().numpy())
 
-        g_optimizer.zero_grad()
+            optimizer.zero_grad()
 
-        loss.backward(retain_graph=True)
-        g_optimizer.step()
+            loss.backward()
+            optimizer.step()
 
-training_stop = time.time()
 
-pred = torch.zeros(1, 1)
-for batch in test_loader:
-    x, y, frame_idx = batch
-    x = x.to("cuda").squeeze(0)
-    pred = torch.cat((pred, model(x, frame_idx).detach().cpu()))
+    training_stop = time.time()
 
-# pred = pred[1:, ...].numpy()
-# pred = pred.reshape(config.image_shape)
-# pred= np.array(pred, dtype=np.float32)
-# nib.save(nib.Nifti1Image(pred, affine=ground_truth.affine, header=ground_truth.header, extra=ground_truth.extra, file_map=ground_truth.file_map), "out_multihash.nii.gz") #file_map = ground_truth.file_map
+    pred = torch.zeros(1, 1)
+    for batch in test_loader:
+        x, y = batch
+        x = x.to("cuda").squeeze(0)
+        pred = torch.cat((pred, model(x).detach().cpu()))
 
-gt_image = nib.load(config.image_path)
+    # pred = pred[1:, ...].numpy()
+    # pred = pred.reshape(config.image_shape)
+    # pred= np.array(pred, dtype=np.float32)
+    # nib.save(nib.Nifti1Image(pred, affine=ground_truth.affine, header=ground_truth.header, extra=ground_truth.extra, file_map=ground_truth.file_map), "out_multihash.nii.gz") #file_map = ground_truth.file_map
 
-#ugly reshaping, placeholder
-image = np.zeros(config.image_shape)
-pred = pred[1:, ...].numpy()
-pred= np.array(pred, dtype=np.float32)
-for i in range(config.n_frames):
-    im = pred[np.prod(config.image_shape[0:3]) * i: np.prod(config.image_shape[0:3]) * (i+1), :]
-    im = im.reshape(config.image_shape[0:3])
-    image[..., i] = im
+    gt_image = nib.load(config.image_path)
 
-nib.save(nib.Nifti1Image(image, affine=gt_image.affine, header=gt_image.header), filepath + "out_multihash.nii.gz") #file_map = ground_truth.file_map
+    #ugly reshaping, placeholder
+    image = np.zeros(config.image_shape)
+    pred = pred[1:, ...].numpy()
+    pred= np.array(pred, dtype=np.float32)
+    for i in range(config.n_frames):
+        im = pred[np.prod(config.image_shape[0:3]) * i: np.prod(config.image_shape[0:3]) * (i+1), :]
+        im = im.reshape(config.image_shape[0:3])
+        image[..., i] = im
 
-plt.plot(range(len(losses)), losses)
-plt.savefig(filepath +'losses_MultiHash.png')
+    nib.save(nib.Nifti1Image(image, affine=gt_image.affine, header=gt_image.header), filepath + f"out_multiMLP{idx}.nii.gz") #file_map = ground_truth.file_map
 
-config.export_to_txt(file_path=filepath)
+    plt.plot(range(len(losses)), losses)
+    plt.savefig(filepath +f'losses_MultiHash{idx}.png')
 
-data = nib.load(config.image_path).get_fdata(dtype=np.float64)
-ground_truth = (data / np.max(data))  * 2 - 1
+    config.export_to_txt(file_path=filepath)
 
-output = image
+    data = nib.load(config.image_path).get_fdata(dtype=np.float64)
+    ground_truth = (data / np.max(data))  * 2 - 1
 
-# ###############
-# #INTERPOLATION#
-# ###############
-# #create one latent per frame
-# lats = []
-# for batch in test_loader:
-#     x, y, frame_idx = batch
-#     x = x.to("cuda").squeeze(0)
-#     lat = model.encoders[frame_idx](x)
-#     lats.append(lat.detach())
+    output = image
 
-# #interp latents at half distance
-# interps = []
-# for i in range(len(lats) - 1):
-#     interps.append(0.5 * lats[i] + 0.5 * lats[i + 1])
+    # ###############
+    # #INTERPOLATION#
+    # ###############
+    # #create one latent per frame
+    # lats = []
+    # for batch in test_loader:
+    #     x, y, frame_idx = batch
+    #     x = x.to("cuda").squeeze(0)
+    #     lat = model.encoders[frame_idx](x)
+    #     lats.append(lat.detach())
 
-# #recontruct using the MLP
-# pred = torch.zeros(1, 1)
-# for interp in interps:
-#     pred = torch.cat((pred, model.decoder(interp).detach().cpu()))
+    # #interp latents at half distance
+    # interps = []
+    # for i in range(len(lats) - 1):
+    #     interps.append(0.5 * lats[i] + 0.5 * lats[i + 1])
 
-# #save results
-# image = np.zeros(config.image_shape)
-# pred = pred[1:, ...].numpy()
-# pred= np.array(pred, dtype=np.float32)
-# for i in range(len(interps)):
-#     im = pred[np.prod(config.image_shape[0:3]) * i: np.prod(config.image_shape[0:3]) * (i+1), :]
-#     im = im.reshape(config.image_shape[0:3])
-#     image[..., i] = im
+    # #recontruct using the MLP
+    # pred = torch.zeros(1, 1)
+    # for interp in interps:
+    #     pred = torch.cat((pred, model.decoder(interp).detach().cpu()))
 
-# nib.save(nib.Nifti1Image(image, affine=gt_image.affine, header=gt_image.header), filepath + "out_interp.nii.gz") 
+    # #save results
+    # image = np.zeros(config.image_shape)
+    # pred = pred[1:, ...].numpy()
+    # pred= np.array(pred, dtype=np.float32)
+    # for i in range(len(interps)):
+    #     im = pred[np.prod(config.image_shape[0:3]) * i: np.prod(config.image_shape[0:3]) * (i+1), :]
+    #     im = im.reshape(config.image_shape[0:3])
+    #     image[..., i] = im
 
-#Save lats
-for idx, lat in enumerate(lats):
+    # nib.save(nib.Nifti1Image(image, affine=gt_image.affine, header=gt_image.header), filepath + "out_interp.nii.gz") 
+
+    #Save lats
+    # for idx, lat in enumerate(lats):
+    #     torch.save(lat, filepath + f'lat{idx}.pt')
     torch.save(lat, filepath + f'lat{idx}.pt')
 
-#save decoder
-state_decoder = model.decoder.state_dict()
+    #save decoder
+    state_decoder = model.mlp.state_dict()
 
-torch.save(model.decoder.state_dict(), filepath+'decoder_statedict.pt')
+    torch.save(model.mlp.state_dict(), filepath+f'decoder_statedict{idx}.pt')
 
-# metrics
-with open(filepath + "scores.txt", "w") as f:
-    f.write("MSE : " + str(metrics.mean_squared_error(ground_truth, output)) + "\n")
-    f.write("PSNR : " + str(metrics.peak_signal_noise_ratio(ground_truth, output)) + "\n")
-    if config.dim_in < 4:
-        f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, output)) + "\n")
-    f.write(
-        "training time  : " + str(training_stop - training_start) + " seconds" + "\n"
-    )
-    f.write(
-        "Number of trainable parameters : "
-        + str(sum(p.numel() for p in model.parameters() if p.requires_grad))
-        + "\n"
-    )  # remove condition if you want total parameters
-    f.write("Max memory allocated : " + str(torch.cuda.max_memory_allocated()) + "\n")
+    # metrics
+    with open(filepath + f"scores{idx}.txt", "w") as f:
+        f.write("MSE : " + str(metrics.mean_squared_error(ground_truth, output)) + "\n")
+        f.write("PSNR : " + str(metrics.peak_signal_noise_ratio(ground_truth, output)) + "\n")
+        if config.dim_in < 4:
+            f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, output)) + "\n")
+        f.write(
+            "training time  : " + str(training_stop - training_start) + " seconds" + "\n"
+        )
+        f.write(
+            "Number of trainable parameters : "
+            + str(sum(p.numel() for p in model.parameters() if p.requires_grad))
+            + "\n"
+        )  # remove condition if you want total parameters
+        f.write("Max memory allocated : " + str(torch.cuda.max_memory_allocated()) + "\n")
 
-nib.save(nib.Nifti1Image((ground_truth - output), affine=gt_image.affine), filepath + 'difference.nii.gz')
+    nib.save(nib.Nifti1Image((ground_truth - output), affine=gt_image.affine), filepath + f'difference{idx}.nii.gz')
 
 # #space upscaling
 # up_shape = (600, 600, 6, 15)
@@ -339,3 +335,5 @@ with open("scores_per_frame_sameNet.txt", "w") as f:
         f.write(f"PSNR_{i} : " + str(metrics.peak_signal_noise_ratio(ground_truth[:,:,:,i], output[:,:,:,i])) + "\n")
 
 '''
+
+

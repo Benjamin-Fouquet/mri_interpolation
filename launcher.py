@@ -65,6 +65,15 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+def export_to_txt(dict: dict, file_path: str = "") -> None:
+    '''
+    Helper function to export dictionary to text file
+    '''
+    with open(file_path + "config.txt", "a+") as f:
+        for key in dict:
+            f.write(str(key) + " : " + str(dict[key]) + "\n")
+
+
 with open("config/hash_config.json") as f:
     enco_config = json.load(f)
 
@@ -191,6 +200,7 @@ if config.dim_in == 2:
     plt.savefig(filepath + "difference.png")
 
 config.export_to_txt(file_path=filepath)
+export_to_txt(enco_config, file_path=filepath)
 
 ground_truth = (data / np.max(data))  * 2 - 1
 
@@ -230,3 +240,11 @@ with open(filepath + "scores.txt", "w") as f:
 
 #difference between gt and pred as an image
 nib.save(nib.Nifti1Image((ground_truth - output), affine=image.affine), filepath + 'difference.nii.gz')
+
+
+def export_to_txt(dict, file_path: str = "") -> None:
+    with open(file_path + "config.txt", "a+") as f:
+        for key in dict:
+            f.write(str(key) + " : " + str(dict[key]) + "\n")
+
+export_to_txt(enco_config, filepath)

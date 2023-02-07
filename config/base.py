@@ -14,14 +14,14 @@ import importlib
 @dataclass
 class BaseConfig:
     checkpoint_path = None
-    batch_size: int = 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 10
+    batch_size: int =  743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 500
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None #MappingProxyType({200: 2}) #MappingProxyType({0: 5})
-    # image_path: str = 'data/equinus_downsampled.nii.gz'
+    image_path: str = 'data/equinus_downsampled.nii.gz'
     # image_path: str = '/home/aorus-users/Benjamin/git_repos/mri_interpolation/data/equinus_sameframes.nii.gz'
-    image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+    # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
     coordinates_spacing: np.array = np.array(
         (2 / image_shape[0], 2 / image_shape[1], 2 / image_shape[2])
@@ -29,7 +29,7 @@ class BaseConfig:
     hashconfig_path: str = 'config/hash_config.json'
 
     # Network parameters
-    dim_in: int = 4
+    dim_in: int = 3
     dim_hidden: int = 64
     dim_out: int = 1
     num_layers: int = 6
@@ -38,11 +38,11 @@ class BaseConfig:
     w0_initial: float = 30.0
     use_bias: bool = True
     final_activation = None
-    lr: float = 1e-4  # G requires training with a custom lr, usually lr * 0.1
-    # datamodule: pl.LightningDataModule = MriDataModule
-    # model_cls: pl.LightningModule = HashMLP  
-    datamodule: pl.LightningDataModule = MriFramesDataModule
-    model_cls: pl.LightningModule = MultiHashMLP  
+    lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1
+    datamodule: pl.LightningDataModule = MriDataModule
+    model_cls: pl.LightningModule = HashMLP  
+    # datamodule: pl.LightningDataModule = MriFramesDataModule
+    # model_cls: pl.LightningModule = MultiHashMLP  
     n_frames: int = 15
 
     # # output
@@ -86,7 +86,7 @@ class MNISTConfig:
     w0_initial: float = 30.0
     use_bias: bool = True
     final_activation = None
-    lr: float = 1e-4  # G requires training with a custom lr, usually lr * 0.1
+    lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1
     opt_type: str = "LSTM"
     conv_channels: tuple = (8, 8, 8,)
     datamodule: pl.LightningDataModule = MNISTDataModule

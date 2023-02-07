@@ -618,6 +618,7 @@ class HashSirenNet(pl.LightningModule):
         x, y = batch
         return self(x)
 
+
 class HashMLP(pl.LightningModule):
     '''
     Lightning module for HashMLP. 
@@ -638,12 +639,15 @@ class HashMLP(pl.LightningModule):
         self.lr = lr
         self.losses =[]
 
-        self.encoding = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
-        self.mlp= tcnn.Network(n_input_dims=self.encoding.n_output_dims, n_output_dims=dim_out, network_config=config['network'])
-        self.model = torch.nn.Sequential(self.encoding, self.mlp)
+        self.encoder = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
+        self.decoder= tcnn.Network(n_input_dims=self.encoder.n_output_dims, n_output_dims=dim_out, network_config=config['network'])
+        # self.model = torch.nn.Sequential(self.encoder, self.decoder)
+
 
     def forward(self, x):
-        return self.model(x)
+        z = self.encoder(x)
+        y_pred = self.decoder(z)
+        return y_pred
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
@@ -651,9 +655,10 @@ class HashMLP(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x, y = batch
-        z = self(x)
+        z = self.encoder(x)
+        y_pred = self.decoder(z)
 
-        loss = F.mse_loss(z, y)
+        loss = F.mse_loss(y_pred, y)
         self.losses.append(loss.detach().cpu().numpy())
 
         self.log("train_loss", loss)
@@ -661,7 +666,9 @@ class HashMLP(pl.LightningModule):
 
     def predict_step(self, batch, batch_idx):
         x, y = batch
-        return self(x)
+        z = self.encoder(x)
+        y_pred = self.decoder(z)
+        return y_pred
 
 class MultiHashMLP(pl.LightningModule):
     '''
@@ -697,9 +704,9 @@ class MultiHashMLP(pl.LightningModule):
         self.automatic_optimization = True #set to False if you need to propagate gradients manually. Usually lightning does a good job at no_grading models not used for a particular training step. Also, grads are not propagated in inctive leaves
 
     def forward(self, x, frame_idx):
-        lat =self.encoders[frame_idx](x)
-        z = self.decoder(lat)
-        return z.float()
+        z =self.encoders[frame_idx](x)
+        y_pred = self.decoder(z)
+        return y_pred.float()
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
@@ -709,9 +716,9 @@ class MultiHashMLP(pl.LightningModule):
         x, y, frame_idx = batch
         x = x.squeeze(0)
         y = y.squeeze(0)
-        lat = self.encoders[frame_idx](x) #pred, model(x)
-        z = self.decoder(lat)
-        loss = F.mse_loss(z, y)
+        z = self.encoders[frame_idx](x) #pred, model(x)
+        y_pred = self.decoder(z)
+        loss = F.mse_loss(y_pred, y)
 
         self.losses.append(loss.detach().cpu().numpy())
 
@@ -725,9 +732,9 @@ class MultiHashMLP(pl.LightningModule):
         x, y, frame_idx = batch
         x = x.squeeze(0)
         y = y.squeeze(0)
-        lat = self.encoders[frame_idx](x) #pred, model(x)
-        z = self.decoder(lat)
-        return z
+        z = self.encoders[frame_idx](x) #pred, model(x)
+        y_pred = self.decoder(z)
+        return y_pred
 
 class MultiSiren(pl.LightningModule):
     '''
@@ -797,3 +804,185 @@ class MultiSiren(pl.LightningModule):
         z = self.decoder(lat)
         return z
 
+
+'''
+Earlier models for tests
+'''
+# class HashMLP(pl.LightningModule):
+#     '''
+#     Lightning module for HashMLP. 
+#     '''
+#     def __init__(
+#         self,
+#         dim_in,
+#         dim_out,
+#         config,
+#         lr,
+#         *args,
+#         **kwargs
+#     ):
+#         super().__init__()
+#         self.config = config
+#         self.dim_in = dim_in
+#         self.dim_out = dim_out
+#         self.lr = lr
+#         self.losses =[]
+
+#         self.encoding = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
+#         self.mlp= tcnn.Network(n_input_dims=self.encoding.n_output_dims, n_output_dims=dim_out, network_config=config['network'])
+#         self.model = torch.nn.Sequential(self.encoding, self.mlp)
+
+#     def forward(self, x):
+#         return self.model(x)
+
+#     def configure_optimizers(self):
+#         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
+#         return optimizer
+
+#     def training_step(self, batch, batch_idx):
+#         x, y = batch
+#         z = self(x)
+
+#         loss = F.mse_loss(z, y)
+#         self.losses.append(loss.detach().cpu().numpy())
+
+#         self.log("train_loss", loss)
+#         return loss
+
+#     def predict_step(self, batch, batch_idx):
+#         x, y = batch
+#         return self(x)
+
+# class MultiHashMLP(pl.LightningModule):
+#     '''
+#     Lightning module for MultiHashMLP. 
+#     Batch size = 1 means whole volume, setup this way as you need the frame idx
+#     '''
+#     def __init__(
+#         self,
+#         dim_in,
+#         dim_out,
+#         n_frames,
+#         config,
+#         lr,
+#         *args,
+#         **kwargs
+#     ):
+#         super().__init__()
+#         self.config = config
+#         self.dim_in = dim_in
+#         self.dim_out = dim_out
+#         self.n_frames = n_frames
+#         self.lr = lr
+#         self.losses =[]
+
+#         self.encoders = nn.ModuleList()
+#         for _ in range(self.n_frames):
+#             self.encoders.append(tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding']))
+#         self.decoder= tcnn.Network(n_input_dims=self.config["encoding"]["n_levels"] * self.config["encoding"]["n_features_per_level"], n_output_dims=dim_out, network_config=config['network'])
+
+#         # if torch.cuda.is_available():
+#         #     self.decoder.to('cuda')
+
+#         self.automatic_optimization = True #set to False if you need to propagate gradients manually. Usually lightning does a good job at no_grading models not used for a particular training step. Also, grads are not propagated in inctive leaves
+
+#     def forward(self, x, frame_idx):
+#         lat =self.encoders[frame_idx](x)
+#         z = self.decoder(lat)
+#         return z.float()
+
+#     def configure_optimizers(self):
+#         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
+#         return optimizer
+
+#     def training_step(self, batch, batch_idx):
+#         x, y, frame_idx = batch
+#         x = x.squeeze(0)
+#         y = y.squeeze(0)
+#         lat = self.encoders[frame_idx](x) #pred, model(x)
+#         z = self.decoder(lat)
+#         loss = F.mse_loss(z, y)
+
+#         self.losses.append(loss.detach().cpu().numpy())
+
+#         self.log("train_loss", loss)
+#         return loss
+
+#     def predict_step(self, batch, batch_idx):
+#         '''
+#         TODO: adapt for frame adaptive.
+#         '''
+#         x, y, frame_idx = batch
+#         x = x.squeeze(0)
+#         y = y.squeeze(0)
+#         lat = self.encoders[frame_idx](x) #pred, model(x)
+#         z = self.decoder(lat)
+#         return z
+
+# class MultiSiren(pl.LightningModule):
+#     '''
+#     Lightning module for MultiHashMLP. 
+#     Batch size = 1 means whole volume, setup this way as you need the frame idx
+#     '''
+#     def __init__(
+#         self,
+#         dim_in,
+#         dim_hidden,
+#         dim_out,
+#         num_layers,
+#         n_frames,
+#         lr,
+#         *args,
+#         **kwargs
+#     ):
+#         super().__init__()
+#         self.dim_in = dim_in
+#         self.dim_hidden = dim_hidden
+#         self.dim_out = dim_out
+#         self.num_layers = num_layers
+#         self.n_frames = n_frames
+#         self.lr = lr
+#         self.losses =[]
+
+#         self.encoders = nn.ModuleList()
+#         for _ in range(self.n_frames):
+#             self.encoders.append(SirenNet(dim_in=self.dim_in, dim_hidden=self.dim_hidden, dim_out=self.dim_hidden, num_layers=self.num_layers))
+#         self.decoder= SirenNet(dim_in=self.dim_hidden, dim_hidden=self.dim_hidden, dim_out=self.dim_out, num_layers=self.num_layers)
+
+#         # if torch.cuda.is_available():
+#         #     self.decoder.to('cuda')
+
+#         self.automatic_optimization = True #set to False if you need to propagate gradients manually. Usually lightning does a good job at no_grading models not used for a particular training step. Also, grads are not propagated in inctive leaves
+
+#     def forward(self, x, frame_idx):
+#         lat =self.encoders[frame_idx](x)
+#         z = self.decoder(lat)
+#         return z
+
+#     def configure_optimizers(self):
+#         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
+#         return optimizer
+
+#     def training_step(self, batch, batch_idx):
+#         x, y, frame_idx = batch
+#         x = x.squeeze(0)
+#         y = y.squeeze(0)
+#         lat = self.encoders[frame_idx](x) #pred, model(x)
+#         z = self.decoder(lat)
+#         loss = F.mse_loss(z, y)
+
+#         self.losses.append(loss.detach().cpu().numpy())
+
+#         self.log("train_loss", loss)
+#         return loss
+
+#     def predict_step(self, batch, batch_idx):
+#         '''
+#         TODO: adapt for frame adaptive.
+#         '''
+#         x, y, frame_idx = batch
+#         x = x.squeeze(0)
+#         y = y.squeeze(0)
+#         lat = self.encoders[frame_idx](x) #pred, model(x)
+#         z = self.decoder(lat)
+#         return z
