@@ -159,6 +159,14 @@ training_stop = time.time()
 
 filepath = model.logger.log_dir + '/'
 
+try:
+    lats = model.get_latents()
+    for idx, lat in enumerate(lats):
+        torch.save(lat, filepath + f'lat{idx}.pt')
+    print('latents extracted')
+except:
+    print('No latents available')
+
 image = nib.load(config.image_path)
 data = image.get_fdata()
 if config.dim_in == 2:
