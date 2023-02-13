@@ -638,6 +638,7 @@ class HashMLP(pl.LightningModule):
         self.dim_out = dim_out
         self.lr = lr
         self.losses =[]
+        self.lats = []
 
         self.encoder = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
         self.decoder= tcnn.Network(n_input_dims=self.encoder.n_output_dims, n_output_dims=dim_out, network_config=config['network'])
@@ -667,8 +668,12 @@ class HashMLP(pl.LightningModule):
     def predict_step(self, batch, batch_idx):
         x, y = batch
         z = self.encoder(x)
+        self.lats.append(z)
         y_pred = self.decoder(z)
         return y_pred
+
+    def get_latents(self):
+        return self.lats
 
 class MultiHashMLP(pl.LightningModule):
     '''
@@ -766,15 +771,12 @@ class MultiSiren(pl.LightningModule):
             self.encoders.append(SirenNet(dim_in=self.dim_in, dim_hidden=self.dim_hidden, dim_out=self.dim_hidden, num_layers=self.num_layers))
         self.decoder= SirenNet(dim_in=self.dim_hidden, dim_hidden=self.dim_hidden, dim_out=self.dim_out, num_layers=self.num_layers)
 
-        # if torch.cuda.is_available():
-        #     self.decoder.to('cuda')
-
         self.automatic_optimization = True #set to False if you need to propagate gradients manually. Usually lightning does a good job at no_grading models not used for a particular training step. Also, grads are not propagated in inctive leaves
 
     def forward(self, x, frame_idx):
-        lat =self.encoders[frame_idx](x)
-        z = self.decoder(lat)
-        return z
+        z =self.encoders[frame_idx](x)
+        y_pred = self.decoder(z)
+        return y_pred
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
@@ -784,9 +786,9 @@ class MultiSiren(pl.LightningModule):
         x, y, frame_idx = batch
         x = x.squeeze(0)
         y = y.squeeze(0)
-        lat = self.encoders[frame_idx](x) #pred, model(x)
-        z = self.decoder(lat)
-        loss = F.mse_loss(z, y)
+        z = self.encoders[frame_idx](x) #pred, model(x)
+        y_pred = self.decoder(z)
+        loss = F.mse_loss(y_pred, y)
 
         self.losses.append(loss.detach().cpu().numpy())
 
@@ -800,9 +802,9 @@ class MultiSiren(pl.LightningModule):
         x, y, frame_idx = batch
         x = x.squeeze(0)
         y = y.squeeze(0)
-        lat = self.encoders[frame_idx](x) #pred, model(x)
-        z = self.decoder(lat)
-        return z
+        z = self.encoders[frame_idx](x) #pred, model(x)
+        y_pred = self.decoder(z)
+        return y_pred
 
 
 '''
