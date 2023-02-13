@@ -218,7 +218,7 @@ class Modulator(nn.Module):
 
 
 # siren network
-class FourrierNet(pl.LightningModule):
+class FourierNet(pl.LightningModule):
     """
     First layer sin combined with MLP ReLU. Does not work
     """
