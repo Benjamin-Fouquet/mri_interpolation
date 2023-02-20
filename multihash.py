@@ -44,9 +44,6 @@ from types import MappingProxyType
 from datamodules import MriFramesDataModule
 from models import HashSirenNet, SirenNet, ModulatedSirenNet, HashMLP, MultiHashMLP, MultiSiren
 
-
-
-
 @dataclass
 class BaseConfig:
     checkpoint_path = None
@@ -55,7 +52,8 @@ class BaseConfig:
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None #MappingProxyType({200: 2}) #MappingProxyType({0: 5})
-    image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+    # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+    image_path:str = 'data/equinus_multiframe_noisy.nii.gz'
     image_shape = nib.load(image_path).shape
     hashconfig_path: str = 'config/hash_config.json'
 
@@ -105,6 +103,15 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+def export_to_txt(dict: dict, file_path: str = "") -> None:
+    '''
+    Helper function to export dictionary to text file
+    '''
+    with open(file_path + "config.txt", "a+") as f:
+        for key in dict:
+            f.write(str(key) + " : " + str(dict[key]) + "\n")
+
 
 with open("config/hash_config.json") as f:
     enco_config = json.load(f)
@@ -243,6 +250,7 @@ plt.plot(range(len(losses)), losses)
 plt.savefig(filepath +'losses_MultiHash.png')
 
 config.export_to_txt(file_path=filepath)
+export_to_txt(enco_config, file_path=filepath)
 
 data = nib.load(config.image_path).get_fdata(dtype=np.float64)
 ground_truth = (data / np.max(data))  * 2 - 1

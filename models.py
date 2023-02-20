@@ -638,7 +638,7 @@ class HashMLP(pl.LightningModule):
         self.dim_out = dim_out
         self.lr = lr
         self.losses =[]
-        self.lats = []
+        self.latents = []
 
         self.encoder = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
         self.decoder= tcnn.Network(n_input_dims=self.encoder.n_output_dims, n_output_dims=dim_out, network_config=config['network'])
@@ -668,12 +668,12 @@ class HashMLP(pl.LightningModule):
     def predict_step(self, batch, batch_idx):
         x, y = batch
         z = self.encoder(x)
-        self.lats.append(z)
+        self.latents.append(z)
         y_pred = self.decoder(z)
         return y_pred
 
     def get_latents(self):
-        return self.lats
+        return self.latents
 
 class MultiHashMLP(pl.LightningModule):
     '''
@@ -697,6 +697,7 @@ class MultiHashMLP(pl.LightningModule):
         self.n_frames = n_frames
         self.lr = lr
         self.losses =[]
+        self.latents = []
 
         self.encoders = nn.ModuleList()
         for _ in range(self.n_frames):
@@ -711,7 +712,7 @@ class MultiHashMLP(pl.LightningModule):
     def forward(self, x, frame_idx):
         z =self.encoders[frame_idx](x)
         y_pred = self.decoder(z)
-        return y_pred.float()
+        return y_pred
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
@@ -737,9 +738,13 @@ class MultiHashMLP(pl.LightningModule):
         x, y, frame_idx = batch
         x = x.squeeze(0)
         y = y.squeeze(0)
-        z = self.encoders[frame_idx](x) #pred, model(x)
+        z = self.encoders[frame_idx](x)
+        self.latents.append(z)
         y_pred = self.decoder(z)
         return y_pred
+    
+    def get_latents(self):
+        return self.latents
 
 class MultiSiren(pl.LightningModule):
     '''

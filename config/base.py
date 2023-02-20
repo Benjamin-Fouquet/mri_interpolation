@@ -1,4 +1,5 @@
 
+
 import pytorch_lightning as pl
 import torch
 import os
@@ -14,14 +15,16 @@ import importlib
 @dataclass
 class BaseConfig:
     checkpoint_path = None
-    batch_size: int =  743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 500
+    batch_size: int = 743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 300
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None #MappingProxyType({200: 2}) #MappingProxyType({0: 5})
-    image_path: str = 'data/equinus_downsampled.nii.gz'
+    image_path: str = 'data/equinus_frames/frame8.nii.gz'
+    # image_path: str = 'data/equinus_downsampled.nii.gz'
     # image_path: str = '/home/aorus-users/Benjamin/git_repos/mri_interpolation/data/equinus_sameframes.nii.gz'
     # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+    # image_path: str = 'data/equinus_singleframe_noisy.nii.gz'
     image_shape = nib.load(image_path).shape
     coordinates_spacing: np.array = np.array(
         (2 / image_shape[0], 2 / image_shape[1], 2 / image_shape[2])
@@ -29,7 +32,7 @@ class BaseConfig:
     hashconfig_path: str = 'config/hash_config.json'
 
     # Network parameters
-    dim_in: int = 3
+    dim_in: int = len(image_shape)
     dim_hidden: int = 64
     dim_out: int = 1
     num_layers: int = 6
