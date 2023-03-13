@@ -11,11 +11,16 @@
 		"l2_reg": 1e-6
 	},
 	"encoding": {
-		"otype": "Frequency",
-		"n_frequencies": 64
+		"otype": "HashGrid",
+		"n_levels": 8,
+		"n_features_per_level": 1, 
+		"log2_hashmap_size": 19,
+		"base_resolution": 32,
+		"per_level_scale": 1.2,
+		"interpolation": "Linear"
 	},
 	"network": {
-		"otype": "CutlassMLP", 
+		"otype": "FullyFusedMLP", 
 		"activation": "ReLU",
 		"output_activation": "None",
 		"n_neurons": 64,
