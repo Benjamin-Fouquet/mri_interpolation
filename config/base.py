@@ -14,18 +14,21 @@ import importlib
 
 @dataclass
 class BaseConfig:
-    checkpoint_path = None
-    batch_size: int = 743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 300
+    checkpoint_path = None #'lightning_logs/version_384/checkpoints/epoch=99-step=100.ckpt'
+    image_path: str = 'data/simple.nii.gz'
+    image_shape = nib.load(image_path).shape
+    batch_size: int = int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 50
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None #MappingProxyType({200: 2}) #MappingProxyType({0: 5})
-    image_path: str = 'data/equinus_frames/frame8.nii.gz'
-    # image_path: str = 'data/equinus_downsampled.nii.gz'
+    # image_path: str = 'data/equinus_frames/frame8.nii.gz'
+    # image_path: str = '/mnt/Data/DHCP/sub-CC00074XX09_ses-28000_desc-restore_T2w.nii.gz'
+    # image_path:str = '/mnt/Data/HCP/HCP100_T1T2/146432_T2.nii.gz'
+    
     # image_path: str = '/home/aorus-users/Benjamin/git_repos/mri_interpolation/data/equinus_sameframes.nii.gz'
     # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     # image_path: str = 'data/equinus_singleframe_noisy.nii.gz'
-    image_shape = nib.load(image_path).shape
     coordinates_spacing: np.array = np.array(
         (2 / image_shape[0], 2 / image_shape[1], 2 / image_shape[2])
     )
@@ -41,12 +44,12 @@ class BaseConfig:
     w0_initial: float = 30.0
     use_bias: bool = True
     final_activation = None
-    lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1
+    lr: float = 5e-3  # G requires training with a custom lr, usually lr * 0.1
     datamodule: pl.LightningDataModule = MriDataModule
     model_cls: pl.LightningModule = HashMLP  
     # datamodule: pl.LightningDataModule = MriFramesDataModule
     # model_cls: pl.LightningModule = MultiHashMLP  
-    n_frames: int = 15
+    n_frames: int = image_shape[-1] if len(image_shape) == 4 else None
 
     # # output
     # output_path: str = "results_hash/"

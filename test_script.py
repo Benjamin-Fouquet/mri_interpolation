@@ -29,7 +29,6 @@ from torch.nn import functional as F
 
 import hydra
 import torchio as tio
-from config import base
 from datamodules import MNISTDataModule, MriDataModule, MriFramesDataModule
 from einops import rearrange
 from hydra.utils import call, get_class, instantiate
@@ -43,57 +42,40 @@ from torchsummary import summary
 import tinycudann as tcnn
 import matplotlib.pyplot as plt
 
-# # #build latent list
-# lats = []
-# lats_path = glob.glob('results/multi_MLP/lat*', recursive=True)
-# for path in lats_path:
-#     lats.append(torch.load(path))
-
-# for idx, lat in enumerate(lats):
-#     lat = lat.reshape(352, 352, 6, 15).cpu().detach().numpy()
-#     lat = np.array(lat, dtype=np.float32)
-#     nib.save(nib.Nifti1Image(lat, affine=np.eye(4)), f'results/latents_visualisation/lat_multiH_MultiMLP_{idx}.nii.gz')
-
 torch.manual_seed(1337)
 
-filepath = 'results/noRelu/'
-
-# if __name__ == "__main__":
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument("--batch_size", help="batch size", type=int, required=False)
-#     parser.add_argument("--epochs", help="Number of epochs", type=int, required=False)
-#     parser.add_argument(
-#         "--accumulate_grad_batches",
-#         help="number of batches accumulated per gradient descent step",
-#         type=int,
-#         required=False,
-#     )
-#     parser.add_argument(
-#         "--n_sample",
-#         help="number of points for psf in x, y, z",
-#         type=int,
-#         required=False,
-#     )
-#     parser.add_argument(
-#         "--model_class", help="Modele class selection", type=str, required=False
-#     )
-
-#     args = parser.parse_args()
-
-with open("config/hash_config.json") as f:
-    enco_config = json.load(f)
+filepath = 'results/latents_vis/'
+    
+enco_config = {
+	"encoding": {
+		"otype": "HashGrid",
+		"n_levels": 16,
+		"n_features_per_level": 2, 
+		"log2_hashmap_size": 19,
+		"base_resolution": 16,
+		"per_level_scale": 2,
+		"interpolation": "Linear"
+	},
+	"network": {
+		"otype": "FullyFusedMLP", 
+		"activation": "ReLU",
+		"output_activation": "None",
+		"n_neurons": 64,
+		"n_hidden_layers": 2
+	}
+}
 
 @dataclass
 class BaseConfig:
+    image_path: str = 'data/t2_64cube.nii.gz'
+    # image_path: str = 'data/equinus_downsampled.nii.gz'
+    image_shape = nib.load(image_path).shape
     checkpoint_path = None
-    batch_size: int =  743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 500
+    batch_size: int =  int(np.prod(image_shape)) # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 50
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None #MappingProxyType({200: 2}) #MappingProxyType({0: 5})
-    # image_path: str = 'data/t2_64cube.nii.gz'
-    image_path: str = 'data/equinus_downsampled.nii.gz'
-    image_shape = nib.load(image_path).shape
     hashconfig_path: str = 'config/hash_config.json'
 
     # Network parameters
@@ -111,7 +93,7 @@ class BaseConfig:
     model_cls: pl.LightningModule = HashMLP  
     # datamodule: pl.LightningDataModule = MriFramesDataModule
     # model_cls: pl.LightningModule = MultiHashMLP  
-    n_frames: int = 15
+    n_frames: int = 1
 
     def export_to_txt(self, file_path: str = "") -> None:
         with open(file_path + "config.txt", "w") as f:
@@ -120,98 +102,85 @@ class BaseConfig:
 
 config = BaseConfig()
 
-# # parsed argument -> config
-# for key in args.__dict__:
-#     if args.__dict__[key] is not None:
-#         config.__dict__[key] = args.__dict__[key]
-
-# # correct for model class
-# if args.model_class is not None:
-#     if args.model_class == "PsfSirenNet":
-#         config.model_cls = PsfSirenNet
-#     elif args.model_class == "SirenNet":
-#         config.model_cls = SirenNet
-#     else:
-#         print("model class not recognized")
-#         raise ValueError
-
-training_start = time.time()
-
-####################
-# MODEL DECLARATION#
-####################
-if config.checkpoint_path:
-    model= config.model_cls().load_from_checkpoint(
-        config.checkpoint_path, 
-        dim_in=config.dim_in,
-        dim_hidden=config.dim_hidden,
-        dim_out=config.dim_out,
-        num_layers=config.num_layers,
-        w0=config.w0,
-        w0_initial=config.w0_initial,
-        use_bias=config.use_bias,
-        final_activation=config.final_activation,
-        lr=config.lr,
-        config=enco_config
-        )
-
-else:
-
-    model = config.model_cls(
-        dim_in=config.dim_in,
-        dim_hidden=config.dim_hidden,
-        dim_out=config.dim_out,
-        num_layers=config.num_layers,
-        w0=config.w0,
-        w0_initial=config.w0_initial,
-        use_bias=config.use_bias,
-        final_activation=config.final_activation,
-        lr=config.lr,
-        config=enco_config,
-        n_frames=config.n_frames
-    )
-
-class MLP(pl.LightningModule):
-    def __init__(self, dim_in, dim_hidden, dim_out, num_layers, lr, config, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.lr = lr
-        self.layers = nn.ModuleList()
-        self.layers.append(nn.Linear(in_features=dim_in, out_features=dim_hidden))
-        for i in range(num_layers):
-            self.layers.append(nn.Linear(in_features=dim_hidden, out_features=dim_hidden))
-        self.layers.append(nn.Linear(in_features=dim_hidden, out_features=dim_out))
-
-    def forward(self, x):
-        for layer in self.layers:
-            x = layer(x)
-        return x
-
-    def configure_optimizers(self):
-        return torch.optim.Adam(model.parameters(), lr=self.lr ,weight_decay=1e-5)   
-
-    def training_step(self, batch, batch_idx):
-        x, y = batch
-        y_pred = self(x)
-
-        loss = F.mse_loss(y_pred, y)
-        self.log("train_loss", loss)
-        return loss
-
-    def predict_step(self, batch, batch_idx):
-        x, y = batch
-        y_pred = self(x)
-        return y_pred
-
-class HashMLP(pl.LightningModule):
+class MultiHashMLP(pl.LightningModule):
     '''
-    Lightning module for HashMLP. Ala mano decoder to see if results are comparable
+    Lightning module for MultiHashMLP. 
+    Batch size = 1 means whole volume, setup this way as you need the frame idx
     '''
     def __init__(
         self,
         dim_in,
-        dim_hidden,
         dim_out,
-        num_layers,
+        n_frames,
+        config,
+        lr,
+        *args,
+        **kwargs
+    ):
+        super().__init__()
+        self.config = config
+        self.dim_in = dim_in
+        self.dim_out = dim_out
+        self.n_frames = n_frames
+        self.lr = lr
+        self.losses =[]
+        self.latents = []
+
+        self.encoders = nn.ModuleList()
+        for _ in range(self.n_frames):
+            self.encoders.append(tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding']))
+        self.decoder= tcnn.Network(n_input_dims=self.config["encoding"]["n_levels"] * self.config["encoding"]["n_features_per_level"], n_output_dims=dim_out, network_config=config['network'])
+
+        # if torch.cuda.is_available():
+        #     self.decoder.to('cuda')
+
+        self.automatic_optimization = True #set to False if you need to propagate gradients manually. Usually lightning does a good job at no_grading models not used for a particular training step. Also, grads are not propagated in inctive leaves
+
+    def forward(self, x, frame_idx):
+        z =self.encoders[frame_idx](x)
+        y_pred = self.decoder(z)
+        return y_pred
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
+        return optimizer
+
+    def training_step(self, batch, batch_idx):
+        x, y, frame_idx = batch
+        x = x.squeeze(0)
+        y = y.squeeze(0)
+        z = self.encoders[frame_idx](x) #pred, model(x)
+        y_pred = self.decoder(z)
+        loss = F.mse_loss(y_pred, y)
+
+        self.losses.append(loss.detach().cpu().numpy())
+
+        self.log("train_loss", loss)
+        return loss
+
+    def predict_step(self, batch, batch_idx):
+        '''
+        TODO: adapt for frame adaptive.
+        '''
+        x, y, frame_idx = batch
+        x = x.squeeze(0)
+        y = y.squeeze(0)
+        z = self.encoders[frame_idx](x)
+        self.latents.append(z)
+        y_pred = self.decoder(z)
+        return y_pred
+    
+    def get_latents(self):
+        return self.latents
+
+class HashMLP(pl.LightningModule):
+    '''
+    Lightning module for HashMLP.
+    '''
+    def __init__(
+        self,
+        dim_in,
+        dim_out,
         config,
         lr,
         *args,
@@ -226,7 +195,7 @@ class HashMLP(pl.LightningModule):
         self.lats = []
 
         self.encoder = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
-        self.decoder= MLP(dim_in=self.config["encoding"]["n_levels"] * self.config["encoding"]["n_features_per_level"], dim_hidden=dim_hidden, dim_out=dim_out, num_layers=num_layers, lr=lr, config=config)
+        self.decoder= tcnn.Network(n_input_dims=self.config["encoding"]["n_levels"] * self.config["encoding"]["n_features_per_level"], n_output_dims=dim_out, network_config=self.config)
         # self.model = torch.nn.Sequential(self.encoder, self.decoder)
 
 
@@ -259,48 +228,8 @@ class HashMLP(pl.LightningModule):
 
     def get_latents(self):
         return self.lats
-
-# class Decoder(pl.LightningModule):
-#     def __init__(self, dim_in, dim_hidden, dim_out, config, lr, *args: Any, **kwargs: Any) -> None:
-#         super().__init__(*args, **kwargs)
-#         self.lr = lr
-#         self.model = tcnn.Network(n_input_dims=dim_in, n_output_dims=dim_out, network_config=config['network'])
-
-#     def forward(self, x):
-#         return self.model(x)
-
-#     def configure_optimizers(self):
-#         return torch.optim.Adam(self.model.parameters(), lr=self.lr ,weight_decay=1e-5)   
-
-#     def training_step(self, batch, batch_idx):
-#         x, y = batch
-#         y_pred = self(x)
-
-#         loss = F.mse_loss(y_pred, y)
-#         self.log("train_loss", loss)
-#         return loss
-
-#     def predict_step(self, batch, batch_idx):
-#         x, y = batch
-#         y_pred = self(x)
-#         return y_pred
-         
-model = MLP(
-    dim_in=config.dim_in,
-    dim_hidden=config.dim_hidden,
-    dim_out=config.dim_out,
-    num_layers=config.num_layers,
-    lr=config.lr,
-    config=enco_config,
-)
-
-# model = Decoder(
-#     dim_in=config.dim_in,
-#     dim_hidden=config.dim_hidden,
-#     dim_out=config.dim_out,
-#     config=enco_config,
-#     lr=config.lr,
-# )
+        
+model = HashMLP(dim_in=config.dim_in, dim_hidden=config.dim_hidden, dim_out=config.dim_out, num_layers=config.num_layers, lr=config.lr, config=enco_config)
 ########################
 #DATAMODULE DECLARATION#
 ########################
@@ -311,13 +240,6 @@ datamodule.setup()
 train_loader = datamodule.train_dataloader()
 test_loader = datamodule.test_dataloader()
 
-# model.to('cuda')
-
-optimizer = torch.optim.Adam(model.parameters(), lr=config.lr ,weight_decay=1e-5)       
-
-losses = []
-
-lats = []
 ###############
 # TRAINING LOOP#
 ###############
@@ -329,119 +251,156 @@ trainer = pl.Trainer(
     # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
 )
 # trainer = pl.Trainer(gpus=config.device, max_epochs=config.epochs)
+
+training_start = time.time()
+
 trainer.fit(model, train_loader)
+
+pred = torch.concat(trainer.predict(model, test_loader))
 
 training_stop = time.time()
 
 ground_truth = nib.load(config.image_path)
 
-pred = torch.concat(trainer.predict(model, test_loader))
-if config.dim_in == 3:
-    output = pred.cpu().detach().numpy().reshape(ground_truth.shape)
-    if output.dtype == 'float16':
-        output = np.array(output, dtype=np.float32)
-    nib.save(
-        nib.Nifti1Image(output, affine=np.eye(4)), filepath + "training_result.nii.gz"
-    )
-nib.save(nib.Nifti1Image(pred, affine=ground_truth.affine), "out.nii.gz") #file_map = ground_truth.file_map
+im_pred = pred.detach().cpu().numpy().reshape(config.image_shape)
+im_pred = np.array(im_pred, dtype=np.float32)
 
-output = pred #sugar syntaxing
-
-gt_image = nib.load(config.image_path)
-
-# #ugly reshaping, placeholder
-# image = np.zeros(config.image_shape)
-# pred = pred[1:, ...].numpy()
-# pred= np.array(pred, dtype=np.float32)
-# for i in range(config.n_frames):
-#     im = pred[np.prod(config.image_shape[0:3]) * i: np.prod(config.image_shape[0:3]) * (i+1), :]
-#     im = im.reshape(config.image_shape[0:3])
-#     image[..., i] = im
-
-# nib.save(nib.Nifti1Image(image, affine=gt_image.affine, header=gt_image.header), filepath + f"out_multiMLP{idx}.nii.gz") #file_map = ground_truth.file_map
-
-plt.plot(range(len(losses)), losses)
-plt.savefig(filepath + 'losses.png')
-
-config.export_to_txt(file_path=filepath)
-
-data = nib.load(config.image_path).get_fdata(dtype=np.float32)
-ground_truth = (data / np.max(data))  * 2 - 1
-
-# metrics
-with open(filepath + "scores.txt", "w") as f:
-    f.write("MSE : " + str(metrics.mean_squared_error(ground_truth, output)) + "\n")
-    f.write("PSNR : " + str(metrics.peak_signal_noise_ratio(ground_truth, output)) + "\n")
-    if config.dim_in < 4:
-        f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, output)) + "\n")
-    f.write(
-        "training time  : " + str(training_stop - training_start) + " seconds" + "\n"
-    )
-    f.write(
-        "Number of trainable parameters : "
-        + str(sum(p.numel() for p in model.parameters() if p.requires_grad))
-        + "\n"
-    )  # remove condition if you want total parameters
-    f.write("Max memory allocated : " + str(torch.cuda.max_memory_allocated()) + "\n")
-
-nib.save(nib.Nifti1Image((ground_truth - output), affine=gt_image.affine), filepath + 'difference.nii.gz')
-
-'''
-#load both images
-gt_image = nib.load('/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz')
-pred = nib.load('lightning_logs/version_232/training_result.nii.gz')
-
-ground_truth = gt_image.get_fdata()
-ground_truth = ground_truth / np.max(ground_truth) * 2 - 1
-output = pred.get_fdata()
-
-with open("scores_per_frame_sameNet.txt", "w") as f:
-    for i in range(gt_image.shape[-1]):
-        f.write(f"PSNR_{i} : " + str(metrics.peak_signal_noise_ratio(ground_truth[:,:,:,i], output[:,:,:,i])) + "\n")
-
-'''
+nib.save(nib.Nifti1Image(im_pred, affine=ground_truth.affine), filepath + 'prediction.nii.gz')
 
 
-# # lat = torch.load('results/multi_hash_new/lat5.pt')
-# for idx in range(lat.shape[-1]):
-#     raw = lat[:,idx].reshape(352, 352, 6)
-#     raw = np.array(raw, dtype=np.float32)
-#     nib.save(nib.Nifti1Image(raw, affine=np.eye(4)), f'lightning_logs/version_289/lat_visu_per_dim_{idx}.nii.gz')
+model2 = MultiHashMLP(dim_in=config.dim_in, dim_hidden=config.dim_hidden, dim_out=config.dim_out, num_layers=config.num_layers, lr=config.lr, n_frames=config.n_frames, config=enco_config)
 
+config = {
+	"encoding": {
+		"otype": "HashGrid",
+		"n_levels": 4,
+		"n_features_per_level": 1, 
+		"log2_hashmap_size": 19,
+		"base_resolution": 32,
+		"per_level_scale": 2,
+		"interpolation": "Linear"
+	},
+	"network": {
+		"otype": "CutlassMLP", 
+		"activation": "ReLU",
+		"output_activation": "None",
+		"n_neurons": 32,
+		"n_hidden_layers": 1
+	}
+    
+}
 
-#add noise to images
-# im1 = nib.load('data/equinus_downsampled.nii.gz')
-# im2 = nib.load('/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz')
+net1 = tcnn.Network(n_input_dims=20, n_output_dims=1, network_config=config['network'])
+net2 = torch.nn.ModuleList((torch.nn.Linear(in_features=3, out_features=64, bias=True), torch.nn.ReLU(), torch.nn.Linear(in_features=64, out_features=1, bias=True), torch.nn.ReLU()))
 
-# data1 = im1.get_fdata(dtype=np.float64)
-# data2 = im2.get_fdata(dtype=np.float64)
+def count_parameters(model): 
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)    
 
-# data1 = data1 / np.max(data1)
-# data2 = data2 / np.max(data2)
+count_parameters(net1)
+count_parameters(net2)
 
-# noisy1 = random_noise(data1, mode='gaussian', var=0.1)
-# noisy2 = random_noise(data2, mode='gaussian', var=0.01)
+# def lat_reshape(latent):
 
-# nib.save(nib.Nifti1Image(noisy1, affine=im1.affine), 'data/equinus_singleframe_verynoisy.nii.gz')
-# nib.save(nib.Nifti1Image(noisy2, affine=im2.affine), 'data/equinus_multiframe_noisy.nii.gz')
-
-lats = torch.load(path)
-
-tensor = lats.detach().cpu().numpy()
-tensor = np.array(tensor, dtype=np.float32)
-
-fig, axes = plt.subplots(4, 4, sharex='all', sharey='all')
-
-for i in range(4):
+# for i in range(lats.shape[-1]):
+#     lat = lats[:,i].detach().cpu().numpy()
+#     lat = lat.reshape((16, 16, 16))
+#     lat = np.array(lat, dtype=np.float32)
+#     plt.imshow(lat[:,:,8])
+#     plt.savefig(f'results/latents_vis/{i}_lowres.png')
+    
+fig, axes = plt.subplots(8, 4)
+for i in range(8):
     for j in range(4):
-        image = tensor[:, (i + j)].reshape(352, 352, 6)
-        image = image[:,:, 3] #select middle slice
-        axes[i][j].imshow(image.T, cmap="gray") #cmap="gray", origin="lower"
-        axes[i][j].axis('off')
+        lat = lats[:, (i + 1 * j + 1) - 1].detach().cpu().numpy()
+        lat = lat.reshape((64, 64, 64))
+        lat = np.array(lat, dtype=np.float32)    
+        axes[i, j].imshow(lat[:,:,32])
+        print('pouet')
 
-plt.savefig('out.png')
-plt.clf()
+plt.savefig('lightning_logs/version_379/latents/all_lats.png')
 
-for i, slice in enumerate(zip(axes, tensor):
-     axes[i].imshow(slice.T, origin="lower") #cmap="gray"
-plt.show()
+enco_config = {
+	"encoding": {
+		"otype": "HashGrid",
+		"n_levels": 16,
+		"n_features_per_level": 1, 
+		"log2_hashmap_size": 19,
+		"base_resolution": 8,
+		"per_level_scale": 2,
+		"interpolation": "Linear"
+	},
+	"network": {
+		"otype": "FullyFusedMLP", 
+		"activation": "ReLU",
+		"output_activation": "None",
+		"n_neurons": 64,
+		"n_hidden_layers": 1
+	}
+}
+
+@dataclass
+class BaseConfig:
+    checkpoint_path = None
+    image_path: str = 'data/t2_64cube.nii.gz'
+    image_shape = nib.load(image_path).shape
+    batch_size: int = int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 100
+    num_workers: int = os.cpu_count()
+    device = [0] if torch.cuda.is_available() else []
+    accumulate_grad_batches: MappingProxyType = None #MappingProxyType({200: 2}) #MappingProxyType({0: 5})
+    # image_path: str = 'data/equinus_frames/frame8.nii.gz'
+    # image_path: str = '/mnt/Data/DHCP/sub-CC00074XX09_ses-28000_desc-restore_T2w.nii.gz'
+    # image_path:str = '/mnt/Data/HCP/HCP100_T1T2/146432_T2.nii.gz'
+    
+    # image_path: str = '/home/aorus-users/Benjamin/git_repos/mri_interpolation/data/equinus_sameframes.nii.gz'
+    # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+    # image_path: str = 'data/equinus_singleframe_noisy.nii.gz'
+    coordinates_spacing: np.array = np.array(
+        (2 / image_shape[0], 2 / image_shape[1], 2 / image_shape[2])
+    )
+    hashconfig_path: str = 'config/hash_config.json'
+
+    # Network parameters
+    dim_in: int = len(image_shape)
+    dim_hidden: int = 64
+    dim_out: int = 1
+    num_layers: int = 6
+    n_sample: int = 3
+    w0: float = 30.0
+    w0_initial: float = 30.0
+    use_bias: bool = True
+    final_activation = None
+    lr: float = 5e-3  # G requires training with a custom lr, usually lr * 0.1
+    datamodule: pl.LightningDataModule = MriDataModule
+    model_cls: pl.LightningModule = HashMLP  
+    # datamodule: pl.LightningDataModule = MriFramesDataModule
+    # model_cls: pl.LightningModule = MultiHashMLP  
+    n_frames: int = image_shape[-1] if len(image_shape) == 4 else None
+
+    # # output
+    # output_path: str = "results_hash/"
+    # if os.path.isdir(output_path) is False:
+    #     os.mkdir(output_path)
+    # experiment_number: int = 0 if len(os.listdir(output_path)) == 0 else len(
+    #     os.listdir(output_path)
+    # )
+
+    def export_to_txt(self, file_path: str = "") -> None:
+        with open(file_path + "config.txt", "w") as f:
+            for key in self.__dict__:
+                f.write(str(key) + " : " + str(self.__dict__[key]) + "\n")
+
+config = BaseConfig()
+
+model = HashMLP(dim_in=config.dim_in, dim_hidden=config.dim_hidden, dim_out=config.dim_out, num_layers=config.num_layers, lr=config.lr, config=enco_config)
+
+model = HashMLP.load_from_checkpoint('lightning_logs/version_384/checkpoints/epoch=99-step=100.ckpt', dim_in=config.dim_in, dim_hidden=config.dim_hidden, dim_out=config.dim_out, num_layers=config.num_layers, lr=config.lr, config=enco_config)
+
+model.eval()
+
+for i in range(64):
+    for j in range(64):
+            for k in range(64):
+                    kij[k, i, j] = image[i, j, k]
+                    
+                    

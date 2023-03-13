@@ -62,7 +62,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_class", help="Modele class selection", type=str, required=False
     )
-
+    parser.add_argument(
+        "--enco_config_path", help="path for tinycuda encoding config", type=str, required=False
+    )
     args = parser.parse_args()
 
 def export_to_txt(dict: dict, file_path: str = "") -> None:
@@ -76,7 +78,11 @@ def export_to_txt(dict: dict, file_path: str = "") -> None:
 
 with open("config/hash_config.json") as f:
     enco_config = json.load(f)
-
+    
+if args.enco_config_path:
+    with open(args.enco_config_path) as f:
+        enco_config = json.load(f)
+    
 config = base.BaseConfig()
 
 # parsed argument -> config
@@ -84,7 +90,7 @@ for key in args.__dict__:
     if args.__dict__[key] is not None:
         config.__dict__[key] = args.__dict__[key]
 
-# correct for model class
+# correct for model class #could use getattr() here
 if args.model_class is not None:
     if args.model_class == "PsfSirenNet":
         config.model_cls = PsfSirenNet
@@ -99,7 +105,7 @@ training_start = time.time()
 # MODEL DECLARATION#
 ####################
 if config.checkpoint_path:
-    model= config.model_cls().load_from_checkpoint(
+    model= config.model_cls.load_from_checkpoint(
         config.checkpoint_path, 
         dim_in=config.dim_in,
         dim_hidden=config.dim_hidden,
@@ -170,6 +176,14 @@ if config.dim_in == 3:
     if output.dtype == 'float16':
         output = np.array(output, dtype=np.float32)
     nib.save(
+        nib.Nifti1Image(output, affine=np.eye(4)), filepath + "2_16_0_result.nii.gz"
+    )
+
+if config.dim_in == 3:
+    output = pred.cpu().detach().numpy().reshape(data.shape)
+    if output.dtype == 'float16':
+        output = np.array(output, dtype=np.float32)
+    nib.save(
         nib.Nifti1Image(output, affine=np.eye(4)), filepath + "training_result.nii.gz"
     )
 if config.dim_in == 4:
@@ -193,7 +207,7 @@ if config.dim_in == 2:
     fig.suptitle("Standard training")
     axes[0].set_title("Prediction")
     axes[1].set_title("Ground truth")
-    plt.savefig(filepath + "training_result_standart.png")
+    plt.savefig(filepath + "training_result_standard.png")
     plt.clf()
 
     plt.imshow(diff)
@@ -211,6 +225,20 @@ try:
     print('latents extracted')
 except:
     print('No latents available')
+    
+lats = lats[0]    
+
+os.mkdir(filepath + 'latents/')
+
+#create simple visualisation for latents, only usable with HashMLP
+for i in range(lats.shape[-1]):
+    lat = lats[:,i].detach().cpu().numpy()
+    lat = lat.reshape((config.image_shape))
+    lat = np.array(lat, dtype=np.float32)
+    # plt.imshow(lat[:,:,config.image_shape[-1] // 2])
+    plt.imshow(lat[0,:,:])
+    plt.savefig(filepath + f'latents/latent{i}.png')
+    
 
 # #space upscaling
 # up_shape = (600, 600, 6, 15)
@@ -230,25 +258,24 @@ except:
 #     upsample = np.array(upsample, dtype=np.float32)
 # nib.save(nib.Nifti1Image(upsample, affine=np.eye(4)), filepath + "upsample_time.nii.gz")
 
-# metrics
-with open(filepath + "scores.txt", "w") as f:
-    f.write("MSE : " + str(metrics.mean_squared_error(ground_truth, output)) + "\n")
-    f.write("PSNR : " + str(metrics.peak_signal_noise_ratio(ground_truth, output)) + "\n")
-    # if config.dim_in < 4:
-    #     f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, output)) + "\n")
-    f.write(
-        "training time  : " + str(training_stop - training_start) + " seconds" + "\n"
-    )
-    f.write(
-        "Number of trainable parameters : "
-        + str(sum(p.numel() for p in model.parameters() if p.requires_grad))
-        + "\n"
-    )  # remove condition if you want total parameters
-    f.write("Max memory allocated : " + str(torch.cuda.max_memory_allocated()) + "\n")
+# # metrics
+# with open(filepath + "scores.txt", "w") as f:
+#     f.write("MSE : " + str(metrics.mean_squared_error(ground_truth, output)) + "\n")
+#     f.write("PSNR : " + str(metrics.peak_signal_noise_ratio(ground_truth, output)) + "\n")
+#     # if config.dim_in < 4:
+#     #     f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, output)) + "\n")
+#     f.write(
+#         "training time  : " + str(training_stop - training_start) + " seconds" + "\n"
+#     )
+#     f.write(
+#         "Number of trainable parameters : "
+#         + str(sum(p.numel() for p in model.parameters() if p.requires_grad))
+#         + "\n"
+#     )  # remove condition if you want total parameters
+#     f.write("Max memory allocated : " + str(torch.cuda.max_memory_allocated()) + "\n")
 
 #difference between gt and pred as an image
 nib.save(nib.Nifti1Image((ground_truth - output), affine=image.affine), filepath + 'difference.nii.gz')
-
 
 def export_to_txt(dict, file_path: str = "") -> None:
     with open(file_path + "config.txt", "a+") as f:
@@ -256,3 +283,13 @@ def export_to_txt(dict, file_path: str = "") -> None:
             f.write(str(key) + " : " + str(dict[key]) + "\n")
 
 export_to_txt(enco_config, filepath)
+
+# def latents_to_fig(lats):
+#     fig, axes = plt.subplots(4, 4)
+#     for i in range(4):
+#         for j in range(4):
+#             image = lats[0][:, i+j].detach().cpu().numpy().reshape(74, 74, 52)
+#             axes[i, j].imshow(image[:,:,26], cmap='gray')       
+#     plt.savefig(filepath + 'latents_vis.png')
+    
+# latents_to_fig(lats)

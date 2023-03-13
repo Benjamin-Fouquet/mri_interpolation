@@ -1,5 +1,9 @@
-python siren_psf.py --batch_size 400000 --epochs 50 --n_sample 3 --model_class SirenNet &&
-python siren_psf.py --batch_size 15000 --epochs 50 --n_sample 3 --model_class PsfSirenNet &&
-python siren_psf.py --batch_size 3000 --epochs 50 --n_sample 5 --model_class PsfSirenNet &&
-python siren_psf.py --batch_size 400000 --epochs 50 --accumulate_grad_batches 5 --n_sample 3 --model_class SirenNet &&
-python siren_psf.py --batch_size 15000 --epochs 1420 --accumulate_grad_batches 142 --n_sample 3 --model_class PsfSirenNet
+python launcher.py --enco_config_path config/tiny_config.json &&
+python launcher.py --enco_config_path config/tiny_config_2.json &&
+python launcher.py --enco_config_path config/tiny_config_3.json &&
+python launcher.py --enco_config_path config/hash_config.json &&
+python launcher.py --enco_config_path config/hash_config_2.json &&
+python launcher.py --enco_config_path config/hash_config_3.json &&
+python launcher.py --enco_config_path config/geo_config.json &&
+python launcher.py --enco_config_path config/geo_config_2.json &&
+python launcher.py --enco_config_path config/geo_config_3.json

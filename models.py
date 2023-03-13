@@ -746,6 +746,8 @@ class MultiHashMLP(pl.LightningModule):
     def get_latents(self):
         return self.latents
 
+
+
 class MultiSiren(pl.LightningModule):
     '''
     Lightning module for MultiHashMLP. 
