@@ -151,7 +151,7 @@ class MriImage(Dataset):
 
         axes = []
         for s in image.shape:
-            axes.append(torch.linspace(-1, 1, s))
+            axes.append(torch.linspace(0, 1, s))
 
         mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 
@@ -159,7 +159,7 @@ class MriImage(Dataset):
         pixels = torch.FloatTensor(image)
         pixels = pixels.flatten()
         # normalisation, should be recasted with torch reshape func
-        pixels = ((pixels - torch.min(pixels)) / (torch.max(pixels) - torch.min(pixels))) * 2 - 1
+        pixels = ((pixels - torch.min(pixels)) / (torch.max(pixels) - torch.min(pixels))) #* 2 - 1
         coords = torch.FloatTensor(mgrid)
         coords = coords.reshape(len(pixels), config.dim_in)
         assert len(coords) == len(pixels)
@@ -265,14 +265,14 @@ class MriFrames(Dataset):
 
         axes = []
         for s in self.image.shape:
-            axes.append(torch.linspace(-1, 1, s))
+            axes.append(torch.linspace(0, 1, s))
 
         mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
         # create data tensors
         pixels = torch.FloatTensor(self.image)
         pixels = pixels.reshape(-1, self.image.shape[-1], 1)
         # normalisation, should be recasted with torch reshape func
-        pixels = ((pixels - torch.min(pixels)) / torch.max(pixels)) * 2 - 1
+        pixels = ((pixels - torch.min(pixels)) / torch.max(pixels)) * 2 - 1 #pixels = pixels.reshpae(pixels, (-1, 1)) should also work
         coords = torch.FloatTensor(mgrid)
         coords = coords.reshape(len(pixels), config.dim_in, self.image.shape[-1])
         assert len(coords) == len(pixels)
@@ -294,7 +294,7 @@ class MockMriFrames(Dataset):
         self.shape = shape
         axes = []
         for s in shape:
-            axes.append(torch.linspace(-1, 1, s))
+            axes.append(torch.linspace(0, 1, s))
 
         mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
         # create data tensors
