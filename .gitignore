@@ -17,3 +17,12 @@ pred_lowres.nii.gz
 optuna_studies/
 siren.py
 fourrierMLP.py
+interp_frame_0_5_comparison2.png
+interp_frame_all.png
+interp_1.nii.gz
+interp_3.nii.gz
+interp_frame_0_1.png
+interp_frame_0_5_comparison.png
+interp_frame_0_5_comparison3.png
+interp_frame_0_5.png
+interp_frame_0_6.png

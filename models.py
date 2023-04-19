@@ -651,7 +651,7 @@ class HashMLP(pl.LightningModule):
         return y_pred
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr) #weight_decay=1e-5
         return optimizer
 
     def training_step(self, batch, batch_idx):
@@ -664,7 +664,7 @@ class HashMLP(pl.LightningModule):
 
         self.log("train_loss", loss)
         return loss
-
+    
     def predict_step(self, batch, batch_idx):
         x, y = batch
         z = self.encoder(x)

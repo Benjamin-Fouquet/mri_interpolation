@@ -41,6 +41,7 @@ from skimage.util import random_noise
 from torchsummary import summary
 import tinycudann as tcnn
 import matplotlib.pyplot as plt
+import nibabel.processing as proc
 
 torch.manual_seed(1337)
 
@@ -403,4 +404,204 @@ for i in range(64):
             for k in range(64):
                     kij[k, i, j] = image[i, j, k]
                     
-                    
+     
+     
+     
+     
+     
+import numpy as np 
+import torch     
+
+def hashing(coords):
+    hashtable = {}
+    pi = [1, 2654435761]
+    T = 2 ** 19
+    for x, y in coords:
+        key = 
+                         
+X = np.array([i for i in range(64)])
+Y = np.array([i for i in range(64)])
+
+grid = np.stack((X, Y)).T
+
+#list of primes for dimension agnostic algorithme
+p1 = 1
+p2 = 2654435761
+T = 2 ** 19
+
+#how to downsample ? Tried a pure translation from paper, for a given level
+#TODO: where is lowest res in this algo ? retry with proper form, then prove that duplicates happend at lower res
+uniques = []
+
+Nmax = 16
+Nmin = 1
+
+for i in range(Nmax):
+
+    L = i + 2
+    b = (np.log(Nmax) - np.log(Nmin)) / (L - 1)
+    Nl = Nmin * b
+    grid_l = grid * Nl
+
+
+    hashtable = {}
+
+    for idx, (x, y) in enumerate(grid_l):
+        hashtable[idx] = int(x) ^ 1 % T
+        hashtable[idx] = int(y) ^ p2 % T
+        
+
+    uniques.append(len(np.unique(hashtable)))
+    
+    #parameters organized in L * F levels. 
+    grid = torch.FloatTensor(200000, 16)
+    params= torch.nn.parameter.Parameter(grid)
+    torch.nn.ParameterList
+    torch.nn.parameter.Parameter
+    torch.nn.Linear
+    
+    class TinyEncoding(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.grid = nn.parameter.Parameter(torch.FloatTensor(image_shape, n_levels * n_features))
+            
+
+
+for i in range(15):
+    lat = torch.load(f'lightning_logs/version_0/lat{i}.pt')
+    lat = lat.cpu().numpy()
+    lat = np.array(lat, dtype=np.float32)
+    
+    im0 = lat[:,0].reshape(352, 352, 6)
+    im6 = lat[:,6].reshape(352, 352, 6)
+    im12 = lat[:,12].reshape(352, 352, 6)
+    
+    nib.save(nib.Nifti1Image(im0, affine=np.eye(4)), f'lightning_logs/version_0/latents/frame{i}_lat0.nii.gz')    
+    nib.save(nib.Nifti1Image(im6, affine=np.eye(4)), f'lightning_logs/version_0/latents/frame{i}_lat6.nii.gz')
+    nib.save(nib.Nifti1Image(im12, affine=np.eye(4)), f'lightning_logs/version_0/latents/frame{i}_lat12.nii.gz')
+    
+    
+
+frames = glob.glob('lightning_logs/version_0/latents/frame*_lat0.nii.gz', recursive=True)
+
+fig, axes = plt.subplots(2, 5)
+for idx, frame in enumerate(frames):
+    i = idx // 5
+    j = idx % 5
+    image = nib.load(frame).get_fdata()
+    # axes[i][j].imshow(image[:,:,3].T, origin="lower") #cmap="gray"
+    axes[i][j].imshow(image.T[3,:,:], origin="lower", cmap='gray')
+
+plt.savefig('lightning_logs/version_0/latents/lat0.png')
+
+frames = glob.glob('lightning_logs/version_0/latents/frame*_lat6.nii.gz', recursive=True)
+
+fig, axes = plt.subplots(2, 5)
+for idx, frame in enumerate(frames):
+    i = idx // 5
+    j = idx % 5
+    image = nib.load(frame).get_fdata()
+    # axes[i][j].imshow(image[:,:,3].T, origin="lower") #cmap="gray"
+    axes[i][j].imshow(image.T[3,:,:], origin="lower", cmap='gray')
+
+plt.savefig('lightning_logs/version_0/latents/lat6.png')
+
+frames = glob.glob('lightning_logs/version_0/latents/frame*_lat12.nii.gz', recursive=True)
+
+fig, axes = plt.subplots(2, 5)
+for idx, frame in enumerate(frames):
+    i = idx // 5
+    j = idx % 5
+    image = nib.load(frame).get_fdata()
+    # axes[i][j].imshow(image[:,:,3].T, origin="lower") #cmap="gray"
+    axes[i][j].imshow(image.T[3,:,:], origin="lower", cmap='gray')
+
+plt.savefig('lightning_logs/version_0/latents/lat12.png')
+
+
+image = nib.load('/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz')
+stack = np.zeros((96, 96, 6, 1))
+for i in range(image.shape[-1]):
+    reshaped_image = proc.conform((image.slicer[..., i]), (96, 96, 6))
+    reshaped_data = reshaped_image.get_fdata().reshape(96, 96, 6, 1)
+    stack = np.concatenate((stack, reshaped_data), axis=-1)
+    
+nib.save(nib.Nifti1Image(stack[..., 1:], affine=reshaped_image.affine), 'data/tiny_equinus.nii.gz')
+
+pred10 = nib.load('lightning_logs/version_10/pred_spe.nii.gz') #frame 0 and 6 with 10 interps
+pred11 = nib.load('lightning_logs/version_11/pred_spe.nii.gz') #frame 0 and 1 with 10 interps
+pred12 = nib.load('lightning_logs/version_12/pred_spe.nii.gz') #all frames, 45 interps
+pred13 = nib.load('lightning_logs/version_13/pred_spe.nii.gz') #frame 0, 2, 4, 5 interps, to be compared with frame 1 and 3
+
+#load ground truth data...when fucking possible
+frames = [nib.load(f'data/equinus_frames/frame{i}.nii.gz') for i in range(15)]
+
+fig, axes = plt.subplots(3, 5)
+for i in range(5):
+    fr = frames[i].get_fdata()
+    fr = (fr - np.min(fr)) / (np.max(fr) - np.min(fr)) * 2 - 1
+    axes[0][i].imshow(fr[..., 3].T, origin="lower", cmap="gray") #cmap="gray"
+    sl = images[i]
+    axes[1][i].imshow(sl[..., 3].T, origin="lower", cmap="gray") #cmap="gray"
+    diff = fr - sl
+    axes[2][i].imshow(diff[..., 3].T, origin="lower", cmap="gray") #cmap="gray"
+
+plt.savefig('interp_frame_0_5_comparison3.png')  
+
+#pred
+for i in range(5):
+    sl = pred13.slicer[..., i].get_fdata()
+    axes[1][i].imshow(sl[..., 3].T, origin="lower", cmap="gray") #cmap="gray"
+        
+plt.savefig('interp_frame_0_5.png')  
+
+
+fig, axes = plt.subplots(7, 5)    
+for i in range(7):
+    for j in range(5):
+        sl = pred12.slicer[..., (j * (i + 1)) + j].get_fdata()
+        axes[i][j].imshow(sl[..., 3].T, origin="lower", cmap="gray") #cmap="gray"
+plt.savefig('interp_frame_all.png')
+
+
+lat0 = torch.load('lightning_logs/version_19/lat0.pt')
+lat2 = torch.load('lightning_logs/version_19/lat2.pt')
+lat4 = torch.load('lightning_logs/version_19/lat4.pt')
+
+lat1_interp = (lat0 + lat2) / 2
+lat3_interp = (lat2 + lat4) / 2
+
+config = BaseConfig()
+
+#reinterpret latents using decoder, not possible because tinycuda shit
+model = MultiHashMLP.load_from_checkpoint('lightning_logs/version_19/checkpoints/epoch=499-step=7500.ckpt',
+        dim_in=config.dim_in,
+        dim_hidden=config.dim_hidden,
+        dim_out=config.dim_out,
+        num_layers=config.num_layers,
+        w0=config.w0,
+        w0_initial=config.w0_initial,
+        use_bias=config.use_bias,
+        final_activation=config.final_activation,
+        lr=config.lr,
+        config=enco_config,
+        n_frames=config.n_frames)
+
+output = pred.cpu().detach().numpy().reshape(image.shape)
+if output.dtype == 'float16':
+    output = np.array(output, dtype=np.float32)
+nib.save(
+    nib.Nifti1Image(output, affine=np.eye(4)), "interp_3.nii.gz"
+    )
+
+images = []
+for lat in preds:
+    y_pred = net.mlp(lat)
+    output = y_pred.cpu().detach().numpy().reshape(image.shape)
+    output = np.array(output, dtype=np.float32)
+    images.append(output)
+    
+    
+#mgrid_fonction
+
+    

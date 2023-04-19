@@ -116,7 +116,8 @@ if config.checkpoint_path:
         use_bias=config.use_bias,
         final_activation=config.final_activation,
         lr=config.lr,
-        config=enco_config
+        config=enco_config,
+        n_frames=config.n_frames
         )
 
 else:
@@ -176,7 +177,7 @@ if config.dim_in == 3:
     if output.dtype == 'float16':
         output = np.array(output, dtype=np.float32)
     nib.save(
-        nib.Nifti1Image(output, affine=np.eye(4)), filepath + "2_16_0_result.nii.gz"
+        nib.Nifti1Image(output, affine=image.affine), filepath + "2_16_0_result.nii.gz"
     )
 
 if config.dim_in == 3:
@@ -184,7 +185,7 @@ if config.dim_in == 3:
     if output.dtype == 'float16':
         output = np.array(output, dtype=np.float32)
     nib.save(
-        nib.Nifti1Image(output, affine=np.eye(4)), filepath + "training_result.nii.gz"
+        nib.Nifti1Image(output, affine=image.affine), filepath + "training_result.nii.gz"
     )
 if config.dim_in == 4:
     output = np.zeros(config.image_shape)
@@ -195,7 +196,7 @@ if config.dim_in == 4:
         im = im.reshape(config.image_shape[0:3])
         output[..., i] = im
     nib.save(
-        nib.Nifti1Image(output, affine=np.eye(4)), filepath + "training_result.nii.gz"
+        nib.Nifti1Image(output, affine=image.affine), filepath + "training_result.nii.gz"
     )
 
 if config.dim_in == 2:
@@ -231,13 +232,13 @@ lats = lats[0]
 os.mkdir(filepath + 'latents/')
 
 #create simple visualisation for latents, only usable with HashMLP
-for i in range(lats.shape[-1]):
-    lat = lats[:,i].detach().cpu().numpy()
-    lat = lat.reshape((config.image_shape))
-    lat = np.array(lat, dtype=np.float32)
-    # plt.imshow(lat[:,:,config.image_shape[-1] // 2])
-    plt.imshow(lat[0,:,:])
-    plt.savefig(filepath + f'latents/latent{i}.png')
+# for i in range(lats.shape[-1]):
+#     lat = lats[:,i].detach().cpu().numpy()
+#     lat = lat.reshape((config.image_shape))
+#     lat = np.array(lat, dtype=np.float32)
+#     # plt.imshow(lat[:,:,config.image_shape[-1] // 2])
+#     plt.imshow(lat[0,:,:])
+#     plt.savefig(filepath + f'latents/latent{i}.png')
     
 
 # #space upscaling
@@ -293,3 +294,18 @@ export_to_txt(enco_config, filepath)
 #     plt.savefig(filepath + 'latents_vis.png')
     
 # latents_to_fig(lats)
+
+# x = torch.linspace(0, 1, 290)
+# y = torch.linspace(0, 1, 290)
+# z = torch.linspace(0, 1, 10)
+
+# mgrid = torch.stack(torch.meshgrid((x, y, z), indexing='ij'), dim=-1)
+
+# X = mgrid.reshape(-1, 3)
+
+# for i in range(10):
+#     with torch.no_grad():
+#         z = model.encoders[i](X.to('cuda'))
+#         y_pred = model.decoder(z)
+#         image = np.array(y_pred.detach().cpu().numpy(), dtype=np.float32).reshape(290, 290, 10)
+#         nib.save(nib.Nifti1Image(image, affine=np.eye(4)), filepath + f'slice{i}.nii.gz')
