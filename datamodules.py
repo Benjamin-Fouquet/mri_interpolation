@@ -379,6 +379,9 @@ class MriFramesDataModule(pl.LightningDataModule):
             num_workers=self.config.num_workers,
             shuffle=False,
         )
+        
+        
+
 
 # set = MriFrames(config=config)
 
@@ -431,3 +434,13 @@ class MriFramesDataModule(pl.LightningDataModule):
 #     it = iter(dataloader)
 #     for i in range(4):
 #         display_output(next(it))
+
+
+############
+#PATTY DATA#
+############
+
+#open and couple dynamique en segmentations for feeding to network
+
+#output ? batch, image, segmentation or pixels in image
+
