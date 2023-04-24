@@ -233,7 +233,7 @@ class MriDataModule(pl.LightningDataModule):
         '''
         axes = []
         for s in shape:
-            axes.append(torch.linspace(-1, 1, s))
+            axes.append(torch.linspace(0, 1, s))
 
         mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
         fake_pix = torch.zeros(np.product(shape))
