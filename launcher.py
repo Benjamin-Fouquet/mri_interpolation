@@ -7,6 +7,7 @@ TODO:
 
 import json
 import os
+import copy
 
 import pytorch_lightning as pl
 import torch
@@ -23,6 +24,7 @@ from typing import Any, Dict, Tuple, Union, FrozenSet, List
 
 import matplotlib.pyplot as plt
 import nibabel as nib
+import nibabel.processing as proc
 # import pytorch_lightning as pl
 import numpy as np
 import pytorch_lightning as pl
@@ -219,17 +221,17 @@ export_to_txt(enco_config, file_path=filepath)
 
 ground_truth = (data / np.max(data))  * 2 - 1
 
-try:
-    lats = model.get_latents()
-    for idx, lat in enumerate(lats):
-        torch.save(lat, filepath + f'lat{idx}.pt')
-    print('latents extracted')
-except:
-    print('No latents available')
+# try:
+#     lats = model.get_latents()
+#     for idx, lat in enumerate(lats):
+#         torch.save(lat, filepath + f'lat{idx}.pt')
+#     print('latents extracted')
+# except:
+#     print('No latents available')
     
-lats = lats[0]    
+# lats = lats[0]    
 
-os.mkdir(filepath + 'latents/')
+# os.mkdir(filepath + 'latents/')
 
 #create simple visualisation for latents, only usable with HashMLP
 # for i in range(lats.shape[-1]):
@@ -241,14 +243,25 @@ os.mkdir(filepath + 'latents/')
 #     plt.savefig(filepath + f'latents/latent{i}.png')
     
 
-# #space upscaling
-# up_shape = (600, 600, 6, 15)
-# loader = datamodule.upsampling(batch_size=100000, shape=up_shape)
-# upsample = torch.concat(trainer.predict(model, loader))
-# upsample = upsample.cpu().detach().numpy().reshape(up_shape)
-# if upsample.dtype == 'float16':
-#     upsample = np.array(upsample, dtype=np.float32)
-# nib.save(nib.Nifti1Image(upsample, affine=np.eye(4)), filepath + "upsample_space.nii.gz")
+#space upscaling
+up_shape = (1408, 1408, 6)
+loader = datamodule.upsampling(batch_size=100000, shape=up_shape)
+upsample = torch.concat(trainer.predict(model, loader))
+upsample = upsample.cpu().detach().numpy().reshape(up_shape)
+if upsample.dtype == 'float16':
+    upsample = np.array(upsample, dtype=np.float32)
+nib.save(nib.Nifti1Image(upsample, affine=np.eye(4)), filepath + "upsample_space.nii.gz")
+
+
+#compare with normal interpolation
+gt = nib.load(config.image_path)
+up_affine = gt.affine[:,:].copy()
+up_affine[0, 0:2] /= 4
+up_affine[1, 0:2] /= 4
+up_affine[2, 0:2] /= 4
+
+up = proc.resample_from_to(gt, (up_shape, up_affine))
+nib.save(up, '/home/aorus-users/Benjamin/git_repos/mri_interpolation/lightning_logs/version_23/' + "upsample_spline.nii.gz")
 
 # #temporal upscaling
 # up_shape = (352, 352, 6, 60)
