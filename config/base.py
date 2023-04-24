@@ -15,9 +15,10 @@ import importlib
 @dataclass
 class BaseConfig:
     checkpoint_path = None #'lightning_logs/version_384/checkpoints/epoch=99-step=100.ckpt'
-    image_path: str = 'data/simple.nii.gz'
+    # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+    image_path: str = 'data/equinus_downsampled.nii.gz'
     image_shape = nib.load(image_path).shape
-    batch_size: int = int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    batch_size: int = 4096#int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
     epochs: int = 50
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
@@ -36,7 +37,7 @@ class BaseConfig:
 
     # Network parameters
     dim_in: int = len(image_shape)
-    dim_hidden: int = 64
+    dim_hidden: int = 128
     dim_out: int = 1
     num_layers: int = 6
     n_sample: int = 3
@@ -44,12 +45,13 @@ class BaseConfig:
     w0_initial: float = 30.0
     use_bias: bool = True
     final_activation = None
-    lr: float = 5e-3  # G requires training with a custom lr, usually lr * 0.1
+    lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1
     datamodule: pl.LightningDataModule = MriDataModule
     model_cls: pl.LightningModule = HashMLP  
     # datamodule: pl.LightningDataModule = MriFramesDataModule
     # model_cls: pl.LightningModule = MultiHashMLP  
-    n_frames: int = image_shape[-1] if len(image_shape) == 4 else None
+    n_frames: int = 15
+    # n_frames: int = image_shape[-1] if len(image_shape) == 4 else None
 
     # # output
     # output_path: str = "results_hash/"
@@ -122,3 +124,5 @@ def string_to_class(string):
     #needs importlib
     MyClass = getattr(importlib.import_module(module_string), cls_string)
     return MyClass
+
+
