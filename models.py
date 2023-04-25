@@ -100,7 +100,6 @@ class SirenNet(pl.LightningModule):
         training step: forward pass + backprop
         predict step: used for inference
         configure_optimizer: optimizer linked to model
-
     '''
     def __init__(
         self,
