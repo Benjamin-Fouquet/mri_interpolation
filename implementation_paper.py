@@ -16,10 +16,10 @@ import numpy as np
 class BaseConfig:
     checkpoint_path = None #'lightning_logs/version_384/checkpoints/epoch=99-step=100.ckpt'
     image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
-    image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+    # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
-    batch_size: int = 1000000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 50
+    batch_size: int = 100000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 5
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None #MappingProxyType({200: 2}) #MappingProxyType({0: 5})
@@ -30,13 +30,13 @@ class BaseConfig:
     dim_in: int = len(image_shape)
     dim_hidden: int = 256 #should match n_frequencies
     dim_out: int = 1
-    num_layers: int = 5
+    num_layers: int = 18
     skip_connections = (5, 11,)
     w0: float = 30.0
     w0_initial: float = 30.0
     use_bias: bool = True
     final_activation = None
-    lr: float = 1e-4  # G requires training with a custom lr, usually lr * 0.1 
+    lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1 
     # datamodule: pl.LightningDataModule = MriFramesDataModule
     # model_cls: pl.LightningModule = MultiHashMLP  
     n_frames: int = 15
@@ -97,7 +97,7 @@ class FreqMLP(pl.LightningModule):
         skip = x.clone()
         for idx, layer in enumerate(self.decoder):
             if idx in self.skip_connections:
-                x = torch.cat(skip, x)
+                x = torch.hstack((skip, x))
             x = layer(x)
         return x 
 
@@ -138,6 +138,7 @@ model = FreqMLP(dim_in=config.dim_in,
 mri_image = nib.load(config.image_path)
 
 Y = torch.FloatTensor(mri_image.get_fdata(dtype=np.float32)).flatten().unsqueeze(-1)
+Y = Y / Y.max()
 
 axes = []
 for s in mri_image.shape:
@@ -150,9 +151,9 @@ X = coords.reshape(len(Y), config.dim_in)
 
 dataset = torch.utils.data.TensorDataset(X, Y)
 
-train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=True, num_workers=os.cpu_count() // 4)
+train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=True, num_workers=config.num_workers)
 
-test_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=os.cpu_count() // 4)  
+test_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)  
                 
 trainer = pl.Trainer(
     gpus=config.device,
@@ -170,5 +171,33 @@ pred = torch.concat(trainer.predict(model, test_loader))
 im = pred.reshape(mri_image.shape)
 im = im.detach().cpu().numpy()
 im = np.array(im, dtype=np.float32)
-nib.save(nib.Nifti1Image(im, affine=np.eye(4)), 'pred.nii.gz')               
+nib.save(nib.Nifti1Image(im, affine=np.eye(4)), 'pred.nii.gz')
+
+#t interp * 10
+interp_factor = 2
+
+Y_interp = torch.zeros((np.prod(mri_image.shape) * interp_factor, 1))
+
+axes = []
+for idx, s in enumerate(mri_image.shape):
+    if idx == len(mri_image.shape) - 1:
+        axes.append(torch.linspace(0, 1, s * interp_factor))        
+    else:
+        axes.append(torch.linspace(0, 1, s))
+
+mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+
+coords = torch.FloatTensor(mgrid)
+X_interp = coords.reshape(len(Y_interp), config.dim_in)    
+
+interp_dataset = torch.utils.data.TensorDataset(X_interp, Y_interp)
+interp_loader = torch.utils.data.DataLoader(interp_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
+
+#create an interpolation
+interp = torch.concat(trainer.predict(model, interp_loader))
+            
+interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3] * interp_factor))
+interp_im = interp_im.detach().cpu().numpy()
+interp_im = np.array(interp_im, dtype=np.float32)
+nib.save(nib.Nifti1Image(interp_im, affine=np.eye(4)), 'interpolation.nii.gz')
 
