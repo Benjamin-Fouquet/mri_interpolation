@@ -14,7 +14,21 @@ Tested Networks:
 Conclusion:
     Convergence happens when using RMSE, end result not satisfactory
 Potential pitfalls
-    Indices of vertices may not be fixed, create issue when reconstructing volume. TODO: how to test this ?
+    Indices of vertices may not be fixed, create issue when reconstructing volume. TODO: how to test this ? Solution, reco extract from dataset (ok). Prob at shuffle on training
+    
+TEST TWO: f(x, y, z, t) = delta (x, y, z)
+Test object:
+    deforming cube
+Tested Networks:
+    MLPDelta
+    SirenDelta
+Conclusion:
+    Works......but of course, because optimal solution is all to zero in this implementation, fails
+Pitfalls:
+    optimal solution is zeroing all paramters, need reimplementation
+    
+TODO 26.04:
+Reimplement delta calculation to have a true convergence on networks.
 '''
 
 import trimesh
