@@ -20,19 +20,19 @@ torch.manual_seed(1337)
 @dataclass
 class BaseConfig:
     checkpoint_path = None #'lightning_logs/version_384/checkpoints/epoch=99-step=100.ckpt'
-    # image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
-    image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+    image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
+    # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
-    batch_size: int = 100000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 50
+    batch_size: int = 200000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 500
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
     # Network parameters
-    encoder_type: str = None #'tcnn'
+    encoder_type: str = 'tcnn'   #'tcnn'
     n_frequencies: int = 64  #for classic, n_out = 2 * n_freq. For tcnn, n_out = 2 * n_freq * dim_in
     dim_in: int = len(image_shape)
-    dim_hidden: int = 256 #should match n_frequencies
+    dim_hidden: int = 256 
     dim_out: int = 1
     num_layers: int = 18
     skip_connections: tuple = (5, 11,)
@@ -48,6 +48,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", help="batch size", type=int, required=False)
     parser.add_argument("--epochs", help="Number of epochs", type=int, required=False)
+    parser.add_argument("--image_path", help="path of image", type=str, required=False)
+    parser.add_argument("--encoder_type", help="tcnn or classic", type=str, required=False)
+    parser.add_argument("--n_frequencies", help="number of encoding frequencies", type=int, required=False)
     args = parser.parse_args()
 
 def export_to_txt(dict: dict, file_path: str = "") -> None:
