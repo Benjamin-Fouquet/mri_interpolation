@@ -1,5 +1,7 @@
 '''
 Implementation 'Continuous Longitudinal Fetus Brain Atlas Construction via Implicit Neural Representation' using tinycuda
+
+current state: Test if the differnetial encoding and reordering of T is beneficial for resutlts. Maybe try first 1 encoder but with reordered T, then dual encoder
 '''
 from typing import List, Optional, Union
 from pytorch_lightning.utilities.types import LRSchedulerTypeUnion
@@ -23,9 +25,8 @@ torch.manual_seed(1337)
 @dataclass
 class BaseConfig:
     checkpoint_path = None #'lightning_logs/version_384/checkpoints/epoch=99-step=100.ckpt'
-    # image_path: str = 'data/equinus_downsampled.nii.gz'
-    # image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
-    image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+    image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
+    # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
     batch_size: int = 200000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
     epochs: int = 30
@@ -33,8 +34,9 @@ class BaseConfig:
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
     # Network parameters
-    encoder_type: str = None #'tcnn'   #'tcnn'
-    n_frequencies: int = 128  #for classic, n_out = 2 * n_freq. For tcnn, n_out = 2 * n_freq * dim_in
+    encoder_type: str = 'tcnn' #   
+    n_frequencies: int = 64 if encoder_type == 'tcnn' else 128  #for classic, n_out = 2 * n_freq. For tcnn, n_out = 2 * n_freq * dim_in
+    n_frequencies_t: int = 8 if encoder_type == 'tcnn' else 16
     dim_in: int = len(image_shape)
     dim_hidden: int = 256 
     dim_out: int = 1
@@ -55,6 +57,7 @@ if __name__ == "__main__":
     parser.add_argument("--image_path", help="path of image", type=str, required=False)
     parser.add_argument("--encoder_type", help="tcnn or classic", type=str, required=False)
     parser.add_argument("--n_frequencies", help="number of encoding frequencies", type=int, required=False)
+    parser.add_argument("--n_frequencies_t", help="number of encoding frequencies for time", type=int, required=False)
     args = parser.parse_args()
 
 def export_to_txt(dict: dict, file_path: str = "") -> None:
@@ -144,6 +147,7 @@ class FreqMLP(pl.LightningModule):
         skip_connections,
         encoder_type,
         n_frequencies,
+        n_frequencies_t,
         lr,
         *args,
         **kwargs
@@ -156,16 +160,19 @@ class FreqMLP(pl.LightningModule):
         self.skip_connections = skip_connections #index of skip connections, starting from 0
         self.lr = lr
         self.n_frequencies = n_frequencies
+        self.n_frequencies_t = n_frequencies_t
         self.encoder_type = encoder_type
 
         # self.encoder = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
         if self.encoder_type == 'tcnn': #if tcnn is especially required, set it TODO: getattr more elegant
             #create the dictionary
-            self.encoder = tcnn.Encoding(n_input_dims=self.dim_in, encoding_config={'otype': 'Frequency', 'n_frequencies': self.n_frequencies})
+            self.encoder = tcnn.Encoding(n_input_dims=(self.dim_in - 1), encoding_config={'otype': 'Frequency', 'n_frequencies': self.n_frequencies})
+            self.encoder_t = tcnn.Encoding(n_input_dims=1, encoding_config={'otype': 'Frequency', 'n_frequencies': self.n_frequencies_t})
         else: #fallback to classic
-            self.encoder = rff.layers.GaussianEncoding(sigma=10.0, input_size=self.dim_in, encoded_size=self.n_frequencies)
+            self.encoder = rff.layers.GaussianEncoding(sigma=10.0, input_size=(self.dim_in - 1), encoded_size=self.n_frequencies)
+            self.encoder_t = rff.layers.GaussianEncoding(sigma=10.0, input_size=1, encoded_size=self.n_frequencies_t)
             
-        self.encoding_dim_out = self.n_frequencies * 2 * self.dim_in if isinstance(self.encoder, tcnn.Encoding) else self.n_frequencies * 2
+        self.encoding_dim_out = (self.n_frequencies * 2 * (self.dim_in - 1) + self.n_frequencies_t * 2) if isinstance(self.encoder, tcnn.Encoding) else (self.n_frequencies * 2 + self.n_frequencies_t * 2)
         # self.encoder = torch.nn.Sequential(Siren(dim_in=self.dim_in, dim_out=self.dim_in * 2 * config['encoding']['n_frequencies']), Siren(dim_in=self.dim_in * 2 * config['encoding']['n_frequencies'], dim_out=self.dim_in * 2 * config['encoding']['n_frequencies']))
         # self.decoder = tcnn.Network(n_input_dims=self.encoder.n_output_dims, n_output_dims=dim_out, network_config=config['network'])
         self.decoder = torch.nn.ModuleList()
@@ -185,7 +192,9 @@ class FreqMLP(pl.LightningModule):
             
 
     def forward(self, x):
-        x = self.encoder(x)
+        coords = x[:, :(self.dim_in - 1)]
+        t = x[:, -1].unsqueeze(-1)
+        x = torch.hstack((self.encoder(coords), self.encoder_t(t)))
         skip = x.clone()
         for idx, layer in enumerate(self.decoder):
             if idx in self.skip_connections:
@@ -219,26 +228,41 @@ class FreqMLP(pl.LightningModule):
     #     writer = SummaryWriter(log_dir=self.logger.log_dir)
     #     writer.add_text(text_string=str(config), tag='configuration')
     #     writer.close()
-    #     print(str(self.lr_schedulers().get_last_lr()))
+    #     # print(str(model.lr_schedulers().get_last_lr()))
         
-    
-model = FreqMLP(dim_in=config.dim_in, 
+
+
+model_1 = FreqMLP(dim_in=config.dim_in, 
                 dim_hidden=config.dim_hidden, 
                 dim_out=config.dim_out, 
                 n_layers=config.num_layers, 
                 skip_connections=config.skip_connections,
                 n_frequencies=config.n_frequencies,
+                n_frequencies_t=config.n_frequencies_t,                
                 encoder_type=config.encoder_type,
                 lr=config.lr)
 
+# model_2 = FreqMLP(dim_in=config.dim_in, 
+#                 dim_hidden=config.dim_hidden, 
+#                 dim_out=config.dim_out, 
+#                 n_layers=config.num_layers, 
+#                 skip_connections=config.skip_connections,
+#                 n_frequencies=config.n_frequencies,
+#                 n_frequencies_t=config.n_frequencies_t,                
+#                 encoder_type=config.encoder_type,
+#                 lr=config.lr)
+
 mri_image = nib.load(config.image_path)
 
-mri_data = mri_image.get_fdata(dtype=np.float32)
+data = mri_image.get_fdata(dtype=np.float32)
+data_1 = data[:,:,:,::2].copy()
+data_2 = data[:,:,:,1::2].copy()
 
-# Y = mri_data.flatten().unsqueeze(-1)
-Y = mri_data.reshape(-1, 1)
-Y = torch.FloatTensor(mri_image.get_fdata(dtype=np.float32)).reshape(-1, 1)
-Y = Y / Y.max()
+Y = torch.FloatTensor(data).reshape(-1, 1)
+Y_1 = torch.FloatTensor(data_1).reshape(-1, 1)
+Y_1 = Y_1 / Y_1.max()
+Y_2 = torch.FloatTensor(data_2).reshape(-1, 1)
+Y_2 = Y_2 / Y_2.max()
 
 axes = []
 for s in mri_image.shape:
@@ -246,76 +270,167 @@ for s in mri_image.shape:
 
 mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 
-# mgrid[:,:,:,:,[3, 0, 1, 2]] = mgrid[:,:,:,:,[0, 1, 2, 3]]
-
 coords = torch.FloatTensor(mgrid)
-
 X = coords.reshape(len(Y), config.dim_in)
+X_1 = coords[:,:,:,::2,:].reshape(len(Y_1), config.dim_in)
+X_2 = coords[:,:,:,1::2,:].reshape(len(Y_2), config.dim_in)
 
 dataset = torch.utils.data.TensorDataset(X, Y)
+dataset_1 = torch.utils.data.TensorDataset(X_1, Y_1)
+dataset_2 = torch.utils.data.TensorDataset(X_2, Y_2)
 
-train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=True, num_workers=config.num_workers)
+train_loader_1 = torch.utils.data.DataLoader(dataset_1, batch_size=config.batch_size, shuffle=True, num_workers=config.num_workers)
+train_loader_2 = torch.utils.data.DataLoader(dataset_2, batch_size=config.batch_size, shuffle=True, num_workers=config.num_workers)
 
-test_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)  
-                
-trainer = pl.Trainer(
+test_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
+test_loader_1 = torch.utils.data.DataLoader(dataset_1, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)  
+test_loader_2 = torch.utils.data.DataLoader(dataset_2, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)  
+   
+trainer_1 = pl.Trainer(
     gpus=config.device,
     max_epochs=config.epochs,
     accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
     precision=16,
     # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
 )
-# trainer = pl.Trainer(gpus=config.device, max_epochs=config.epochs)
-trainer.fit(model, train_loader)
+# trainer_2 = pl.Trainer(
+#     gpus=config.device,
+#     max_epochs=config.epochs,
+#     accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
+#     precision=16,
+#     # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
+# )
 
-filepath = model.logger.log_dir + '/'
+#pretraining
+trainer_1.fit(model_1, train_loader_1)
+# trainer_2.fit(model_2, train_loader_2)
 
-config.export_to_txt(file_path=filepath)
+#refine stage
+
+
+#dense grid
+Y_interp = torch.zeros((np.prod(mri_image.shape) * config.interp_factor, 1))
+axes = []
+for idx, s in enumerate(mri_image.shape):
+    if idx == (len(mri_image.shape) - 1):
+        axes.append(torch.linspace(0, 1, s * config.interp_factor))        
+    else:
+        axes.append(torch.linspace(0, 1, s))
+        
+mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+
+# mgrid[:,:,:,:,[3, 0, 1, 2]] = mgrid[:,:,:,:,[0, 1, 2, 3]]
+
+coords = torch.FloatTensor(mgrid)
+X_interp = coords.reshape(len(Y_interp), config.dim_in)    
+
+interp_dataset = torch.utils.data.TensorDataset(X_interp, Y_interp)
+interp_loader = torch.utils.data.DataLoader(interp_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
+
+filepath = model_1.logger.log_dir + '/'
 
 #create a prediction
-pred = torch.concat(trainer.predict(model, test_loader))
+pred_1 = torch.concat(trainer_1.predict(model_1, test_loader))
+# pred_2 = torch.concat(trainer_2.predict(model_2, test_loader))
+
+# pred = (pred_1 + pred_2 ) / 2
+pred = pred_1
             
 im = pred.reshape(mri_image.shape)
 im = im.detach().cpu().numpy()
 im = np.array(im, dtype=np.float32)
-nib.save(nib.Nifti1Image(im, affine=np.eye(4)), filepath + 'pred.nii.gz')
+nib.save(nib.Nifti1Image(im, affine=np.eye(4)), filepath + 'pred_before_reg.nii.gz')
+
+#create an interpolation
+interp_1 = torch.concat(trainer_1.predict(model_1, interp_loader))
+# interp_2 = torch.concat(trainer_2.predict(model_2, interp_loader))
+# interp = (interp_1 + interp_2) / 2
+
+interp = interp_1
+            
+interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3] * config.interp_factor))
+interp_im = interp_im.detach().cpu().numpy()
+interp_im = np.array(interp_im, dtype=np.float32)
+nib.save(nib.Nifti1Image(interp_im, affine=np.eye(4)), filepath + 'interpolation.nii.gz')
+
+
+# #training loop for refine stage, old pytorch style
+# optimizer_1 = torch.optim.Adam(model_1.parameters(), lr=config.lr)
+# optimizer_2 = torch.optim.Adam(model_2.parameters(), lr=config.lr)
+
+
+# if config.device == [0]:
+#     model_1 = model_1.to('cuda')
+#     model_2 = model_2.to('cuda')
+
+# for _ in range(config.epochs):
+#     for train_batch in interp_loader:
+#         x, y = train_batch
+#         if config.device == [0]:
+#             x = x.to('cuda')
+#             y = y.to('cuda')
+        
+#         pred_1 = model_1(x)
+#         pred_2 = model_2(x)
+        
+#         loss = F.mse_loss(pred_1, pred_2)
+#         print(str(loss))
+
+#         loss.backward()
+
+#         optimizer_1.step()
+#         optimizer_1.zero_grad()
+#         optimizer_2.step()
+#         optimizer_2.zero_grad()
+#         print(str(loss))
+
+# if config.device == [0]:
+#     model_1 = model_1.to('cpu')
+#     model_2 = model_2.to('cpu')
+
+# #create a prediction
+# pred_1 = torch.concat(trainer_1.predict(model_1, test_loader))
+# pred_2 = torch.concat(trainer_2.predict(model_2, test_loader))
+
+# pred = (pred_1 + pred_2 ) / 2
+            
+# im = pred.reshape(mri_image.shape)
+# im = im.detach().cpu().numpy()
+# im = np.array(im, dtype=np.float32)
+# nib.save(nib.Nifti1Image(im, affine=np.eye(4)), filepath + 'pred_after_reg.nii.gz')
 
 # #t interp * 10
 # Y_interp = torch.zeros((np.prod(mri_image.shape) * config.interp_factor, 1))
+
 # axes = []
+# #reordering to get time correctly
+# new_shape = [mri_image.shape[-1]]
+# new_shape.extend(mri_image.shape[0:3])
 # for idx, s in enumerate(mri_image.shape):
-#     if idx == (len(mri_image.shape) - 1):
+#     if idx == 0:
 #         axes.append(torch.linspace(0, 1, s * config.interp_factor))        
 #     else:
 #         axes.append(torch.linspace(0, 1, s))
         
 # mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 
-# mgrid[:,:,:,:,[3, 0, 1, 2]] = mgrid[:,:,:,:,[0, 1, 2, 3]] #put time to last axe
+# mgrid = mgrid.swapaxes(0, 3) #put time to last axe
 
 # coords = torch.FloatTensor(mgrid)
 # X_interp = coords.reshape(len(Y_interp), config.dim_in)    
-
-# interp_dataset = torch.utils.data.TensorDataset(X_interp, Y_interp)  
 
 # interp_dataset = torch.utils.data.TensorDataset(X_interp, Y_interp)
 # interp_loader = torch.utils.data.DataLoader(interp_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
 
 # #create an interpolation
-# interp = torch.concat(trainer.predict(model, interp_loader))
+# interp_1 = torch.concat(trainer_1.predict(model_1, interp_loader))
+# interp_2 = torch.concat(trainer_2.predict(model_2, interp_loader))
+# interp = (interp_1 + interp_2) / 2
             
 # interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3] * config.interp_factor))
 # interp_im = interp_im.detach().cpu().numpy()
 # interp_im = np.array(interp_im, dtype=np.float32)
 # nib.save(nib.Nifti1Image(interp_im, affine=np.eye(4)), filepath + 'interpolation.nii.gz')
 
-# conf = {'otype': 'Frequency', 'n_frequencies': 64}
-
-# enc = tcnn.Encoding(n_input_dims=3, encoding_config=conf)
-# enc2 = rff.layers.GaussianEncoding(sigma=10.0, input_size=4, encoded_size=64)
-# enc(X[:config.batch_size]).shape
-
-# writer = SummaryWriter(log_dir=model.logger.log_dir)
-# writer.add_text(text_string=str(config), tag='configuration')
-# writer.close()
+config.export_to_txt(file_path=filepath)
 
