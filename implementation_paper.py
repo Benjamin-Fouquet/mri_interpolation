@@ -35,8 +35,8 @@ class BaseConfig:
     accumulate_grad_batches: MappingProxyType = None 
     # Network parameters
     encoder_type: str = 'tcnn' #   
-    n_frequencies: int = 64  #for classic, n_out = 2 * n_freq. For tcnn, n_out = 2 * n_freq * dim_in
-    n_frequencies_t: int = 8
+    n_frequencies: int = 64 if encoder_type == 'tcnn' else 128  #for classic, n_out = 2 * n_freq. For tcnn, n_out = 2 * n_freq * dim_in
+    n_frequencies_t: int = 8 if encoder_type == 'tcnn' else 16
     dim_in: int = len(image_shape)
     dim_hidden: int = 256 
     dim_out: int = 1
@@ -192,8 +192,8 @@ class FreqMLP(pl.LightningModule):
             
 
     def forward(self, x):
-        coords = x[:, 1:self.dim_in]
-        t = x[:, 0].unsqueeze(-1)
+        coords = x[:, :(self.dim_in - 1)]
+        t = x[:, -1].unsqueeze(-1)
         x = torch.hstack((self.encoder(coords), self.encoder_t(t)))
         skip = x.clone()
         for idx, layer in enumerate(self.decoder):
