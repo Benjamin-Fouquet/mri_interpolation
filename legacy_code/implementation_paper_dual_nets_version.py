@@ -19,6 +19,7 @@ import math
 import rff
 import argparse
 from torch.utils.tensorboard import SummaryWriter
+from math import pi
 
 torch.manual_seed(1337)
 
@@ -28,20 +29,20 @@ class BaseConfig:
     image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
     # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
-    batch_size: int = 200000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 10
+    batch_size: int = 100000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 50
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
     # Network parameters
-    encoder_type: str = 'tcnn' #   
+    encoder_type: str = 'rff' #   
     n_frequencies: int = 64 if encoder_type == 'tcnn' else 128  #for classic, n_out = 2 * n_freq. For tcnn, n_out = 2 * n_freq * dim_in
     n_frequencies_t: int = 8 if encoder_type == 'tcnn' else 16
     dim_in: int = len(image_shape)
     dim_hidden: int = 256 
     dim_out: int = 1
     num_layers: int = 18
-    skip_connections: tuple = ()#(5, 11,)
+    skip_connections: tuple = (5, 11,)
     lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1 
     interp_factor: int = 2
 
@@ -56,9 +57,8 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", help="Number of epochs", type=int, required=False)
     parser.add_argument("--image_path", help="path of image", type=str, required=False)
     parser.add_argument("--encoder_type", help="tcnn or classic", type=str, required=False)
-    parser.add_argument("--dim_hidden", help="size of hidden layers", type=int, required=False)
-    parser.add_argument("--num_layers", help="number of layers", type=int, required=False)
-    
+    parser.add_argument("--n_frequencies", help="number of encoding frequencies", type=int, required=False)
+    parser.add_argument("--n_frequencies_t", help="number of encoding frequencies for time", type=int, required=False)
     args = parser.parse_args()
 
 def export_to_txt(dict: dict, file_path: str = "") -> None:
@@ -134,6 +134,48 @@ class Siren(torch.nn.Module):
         out = self.activation(out)
         return out
 
+
+class GaussianFourierFeatureTransform(torch.nn.Module):
+    """
+    An implementation of Gaussian Fourier feature mapping.
+
+    "Fourier Features Let Networks Learn High Frequency Functions in Low Dimensional Domains":
+       https://arxiv.org/abs/2006.10739
+       https://people.eecs.berkeley.edu/~bmild/fourfeat/index.html
+
+    Given an input of size [batches, num_input_channels, width, height],
+     returns a tensor of size [batches, mapping_size*2, width, height].
+    """
+
+    def __init__(self, num_input_channels, mapping_size=256, scale=10):
+        super().__init__()
+
+        self._num_input_channels = num_input_channels
+        self._mapping_size = mapping_size
+        self._B = torch.randn((num_input_channels, mapping_size)) * scale
+
+    def forward(self, x):
+        assert x.dim() == 4, 'Expected 4D input (got {}D input)'.format(x.dim())
+
+        batches, channels, width, height = x.shape
+
+        assert channels == self._num_input_channels,\
+            "Expected input to have {} channels (got {} channels)".format(self._num_input_channels, channels)
+
+        # Make shape compatible for matmul with _B.
+        # From [B, C, W, H] to [(B*W*H), C].
+        x = x.permute(0, 2, 3, 1).reshape(batches * width * height, channels)
+
+        x = x @ self._B.to(x.device)
+
+        # From [(B*W*H), C] to [B, W, H, C]
+        x = x.view(batches, width, height, self._mapping_size)
+        # From [B, W, H, C] to [B, C, W, H]
+        x = x.permute(0, 3, 1, 2)
+
+        x = 2 * pi * x
+        return torch.cat([torch.sin(x), torch.cos(x)], dim=1)
+
 #freq encoding tiny cuda
 class FreqMLP(pl.LightningModule):
     '''
@@ -167,11 +209,14 @@ class FreqMLP(pl.LightningModule):
         # self.encoder = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
         if self.encoder_type == 'tcnn': #if tcnn is especially required, set it TODO: getattr more elegant
             #create the dictionary
-            self.encoder = tcnn.Encoding(n_input_dims=(self.dim_in - 1), encoding_config={'otype': 'Frequency', 'n_frequencies': self.n_frequencies})
-            self.encoder_t = tcnn.Encoding(n_input_dims=1, encoding_config={'otype': 'Frequency', 'n_frequencies': self.n_frequencies_t})
-        else: #fallback to classic
+            self.encoder = tcnn.Encoding(n_input_dims=(self.dim_in - 1), encoding_config={'otype': 'Frequency', 'n_frequencies': self.n_frequencies}, dtype=torch.float32)
+            self.encoder_t = tcnn.Encoding(n_input_dims=1, encoding_config={'otype': 'Frequency', 'n_frequencies': self.n_frequencies_t}, dtype=torch.float32)
+        elif self.encoder_type == 'rff': #fallback to classic
             self.encoder = rff.layers.GaussianEncoding(sigma=10.0, input_size=(self.dim_in - 1), encoded_size=self.n_frequencies)
             self.encoder_t = rff.layers.GaussianEncoding(sigma=10.0, input_size=1, encoded_size=self.n_frequencies_t)
+        else:
+            self.encoder =  GaussianFourierFeatureTransform(num_input_channels=(self.dim_in - 1) ,mapping_size=n_frequencies)
+            self.encoder_t =  GaussianFourierFeatureTransform(num_input_channels=1 ,mapping_size=n_frequencies_t)
             
         self.encoding_dim_out = (self.n_frequencies * 2 * (self.dim_in - 1) + self.n_frequencies_t * 2) if isinstance(self.encoder, tcnn.Encoding) else (self.n_frequencies * 2 + self.n_frequencies_t * 2)
         # self.encoder = torch.nn.Sequential(Siren(dim_in=self.dim_in, dim_out=self.dim_in * 2 * config['encoding']['n_frequencies']), Siren(dim_in=self.dim_in * 2 * config['encoding']['n_frequencies'], dim_out=self.dim_in * 2 * config['encoding']['n_frequencies']))
@@ -188,7 +233,6 @@ class FreqMLP(pl.LightningModule):
                 torch.nn.Linear(in_features=in_features, out_features=self.dim_out if i == (self.n_layers - 1) else self.dim_hidden),
                 torch.nn.BatchNorm1d(num_features=self.dim_out if i == (self.n_layers - 1) else self.dim_hidden), #you can do batochnorm 3D + 1D and cat after
                 torch.nn.ReLU()
-                # torch.nn.GELU()
             )
             self.decoder.append(block)
             
@@ -244,15 +288,15 @@ model_1 = FreqMLP(dim_in=config.dim_in,
                 encoder_type=config.encoder_type,
                 lr=config.lr)
 
-# model_2 = FreqMLP(dim_in=config.dim_in, 
-#                 dim_hidden=config.dim_hidden, 
-#                 dim_out=config.dim_out, 
-#                 n_layers=config.num_layers, 
-#                 skip_connections=config.skip_connections,
-#                 n_frequencies=config.n_frequencies,
-#                 n_frequencies_t=config.n_frequencies_t,                
-#                 encoder_type=config.encoder_type,
-#                 lr=config.lr)
+model_2 = FreqMLP(dim_in=config.dim_in, 
+                dim_hidden=config.dim_hidden, 
+                dim_out=config.dim_out, 
+                n_layers=config.num_layers, 
+                skip_connections=config.skip_connections,
+                n_frequencies=config.n_frequencies,
+                n_frequencies_t=config.n_frequencies_t,                
+                encoder_type=config.encoder_type,
+                lr=config.lr)
 
 mri_image = nib.load(config.image_path)
 
@@ -281,6 +325,7 @@ dataset = torch.utils.data.TensorDataset(X, Y)
 dataset_1 = torch.utils.data.TensorDataset(X_1, Y_1)
 dataset_2 = torch.utils.data.TensorDataset(X_2, Y_2)
 
+train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=True, num_workers=config.num_workers)
 train_loader_1 = torch.utils.data.DataLoader(dataset_1, batch_size=config.batch_size, shuffle=True, num_workers=config.num_workers)
 train_loader_2 = torch.utils.data.DataLoader(dataset_2, batch_size=config.batch_size, shuffle=True, num_workers=config.num_workers)
 
@@ -292,22 +337,22 @@ trainer_1 = pl.Trainer(
     gpus=config.device,
     max_epochs=config.epochs,
     accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
-    precision=16,
+    # precision=16,
     # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
 )
-# trainer_2 = pl.Trainer(
-#     gpus=config.device,
-#     max_epochs=config.epochs,
-#     accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
-#     precision=16,
-#     # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
-# )
+trainer_2 = pl.Trainer(
+    gpus=config.device,
+    max_epochs=config.epochs,
+    accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
+    # precision=16,
+    # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
+)
 
 #pretraining
 trainer_1.fit(model_1, train_loader_1)
-# trainer_2.fit(model_2, train_loader_2)
+trainer_2.fit(model_2, train_loader_2)
 
-#refine stage
+# refine stage
 
 #dense grid
 Y_interp = torch.zeros((np.prod(mri_image.shape) * config.interp_factor, 1))
@@ -330,10 +375,9 @@ filepath = model_1.logger.log_dir + '/'
 
 #create a prediction
 pred_1 = torch.concat(trainer_1.predict(model_1, test_loader))
-# pred_2 = torch.concat(trainer_2.predict(model_2, test_loader))
+pred_2 = torch.concat(trainer_2.predict(model_2, test_loader))
 
-# pred = (pred_1 + pred_2 ) / 2
-pred = pred_1
+pred = (pred_1 + pred_2 ) / 2
             
 im = pred.reshape(mri_image.shape)
 im = im.detach().cpu().numpy()
@@ -342,94 +386,123 @@ nib.save(nib.Nifti1Image(im, affine=np.eye(4)), filepath + 'pred_before_reg.nii.
 
 #create an interpolation
 interp_1 = torch.concat(trainer_1.predict(model_1, interp_loader))
-# interp_2 = torch.concat(trainer_2.predict(model_2, interp_loader))
-# interp = (interp_1 + interp_2) / 2
-
-interp = interp_1
+interp_2 = torch.concat(trainer_2.predict(model_2, interp_loader))
+interp = (interp_1 + interp_2) / 2
             
 interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3] * config.interp_factor))
 interp_im = interp_im.detach().cpu().numpy()
 interp_im = np.array(interp_im, dtype=np.float32)
 nib.save(nib.Nifti1Image(interp_im, affine=np.eye(4)), filepath + 'interpolation.nii.gz')
 
+# #LOAD MODELS, SOLVE HYPERPARAMS
+# model_1 = FreqMLP.load_from_checkpoint('lightning_logs/version_196/checkpoints/epoch=29-step=2820.ckpt', 
+#                 dim_in=config.dim_in, 
+#                 dim_hidden=config.dim_hidden, 
+#                 dim_out=config.dim_out, 
+#                 n_layers=config.num_layers, 
+#                 skip_connections=config.skip_connections,
+#                 n_frequencies=config.n_frequencies,
+#                 n_frequencies_t=config.n_frequencies_t,                
+#                 encoder_type=config.encoder_type,
+#                 lr=config.lr)
 
-# #training loop for refine stage, old pytorch style
-# optimizer_1 = torch.optim.Adam(model_1.parameters(), lr=config.lr)
-# optimizer_2 = torch.optim.Adam(model_2.parameters(), lr=config.lr)
+# model_2 = FreqMLP.load_from_checkpoint('lightning_logs/version_197/checkpoints/epoch=29-step=2490.ckpt', 
+#                 dim_in=config.dim_in, 
+#                 dim_hidden=config.dim_hidden, 
+#                 dim_out=config.dim_out, 
+#                 n_layers=config.num_layers, 
+#                 skip_connections=config.skip_connections,
+#                 n_frequencies=config.n_frequencies,
+#                 n_frequencies_t=config.n_frequencies_t,                
+#                 encoder_type=config.encoder_type,
+#                 lr=config.lr)
+
+#training loop for refine stage, old pytorch style
+optimizer_1 = torch.optim.Adam(model_1.parameters(), lr=config.lr)
+optimizer_2 = torch.optim.Adam(model_2.parameters(), lr=config.lr)
 
 
-# if config.device == [0]:
-#     model_1 = model_1.to('cuda')
-#     model_2 = model_2.to('cuda')
+if config.device == [0]:
+    model_1 = model_1.to('cuda')
+    model_2 = model_2.to('cuda')
 
-# for _ in range(config.epochs):
-#     for train_batch in interp_loader:
-#         x, y = train_batch
-#         if config.device == [0]:
-#             x = x.to('cuda')
-#             y = y.to('cuda')
+for _ in range(config.epochs):
+    for train_batch in train_loader:
+        x, y = train_batch
+        if config.device == [0]:
+            x = x.to('cuda')
+            y = y.to('cuda')
         
-#         pred_1 = model_1(x)
-#         pred_2 = model_2(x)
+        pred_1 = model_1(x)
+        pred_2 = model_2(x)
         
-#         loss = F.mse_loss(pred_1, pred_2)
-#         print(str(loss))
+        alpha = 0.2 #Weightng of network to network regulation 
+        
+        loss = ((1 - alpha) * (F.mse_loss(pred_2, y) + F.mse_loss(pred_1, y))) + alpha * F.mse_loss(pred_1, pred_2)
+        print(str(loss))
 
-#         loss.backward()
+        loss.backward()
 
-#         optimizer_1.step()
-#         optimizer_1.zero_grad()
-#         optimizer_2.step()
-#         optimizer_2.zero_grad()
-#         print(str(loss))
+        optimizer_1.step()
+        optimizer_1.zero_grad()
+        optimizer_2.step()
+        optimizer_2.zero_grad()
+        print(str(loss))
 
-# if config.device == [0]:
-#     model_1 = model_1.to('cpu')
-#     model_2 = model_2.to('cpu')
+if config.device == [0]:
+    model_1 = model_1.to('cpu')
+    model_2 = model_2.to('cpu')
 
-# #create a prediction
-# pred_1 = torch.concat(trainer_1.predict(model_1, test_loader))
-# pred_2 = torch.concat(trainer_2.predict(model_2, test_loader))
+trainer = pl.Trainer(
+    gpus=config.device,
+    max_epochs=config.epochs,
+    accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
+    precision=32,
+    # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
+)
 
-# pred = (pred_1 + pred_2 ) / 2
+try:
+    filepath = model_1.logger.log_dir + '/'
+except:
+    filepath = 'lightning_logs/version_196/'
+
+#create a prediction
+pred_1 = torch.concat(trainer.predict(model_1, test_loader))
+pred_2 = torch.concat(trainer.predict(model_2, test_loader))
+
+pred = (pred_1 + pred_2 ) / 2
             
-# im = pred.reshape(mri_image.shape)
-# im = im.detach().cpu().numpy()
-# im = np.array(im, dtype=np.float32)
-# nib.save(nib.Nifti1Image(im, affine=np.eye(4)), filepath + 'pred_after_reg.nii.gz')
+im = pred.reshape(mri_image.shape)
+im = im.detach().cpu().numpy()
+im = np.array(im, dtype=np.float32)
+nib.save(nib.Nifti1Image(im, affine=np.eye(4)), filepath + 'pred_after_reg.nii.gz')
 
-# #t interp * 10
-# Y_interp = torch.zeros((np.prod(mri_image.shape) * config.interp_factor, 1))
-
-# axes = []
-# #reordering to get time correctly
-# new_shape = [mri_image.shape[-1]]
-# new_shape.extend(mri_image.shape[0:3])
-# for idx, s in enumerate(mri_image.shape):
-#     if idx == 0:
-#         axes.append(torch.linspace(0, 1, s * config.interp_factor))        
-#     else:
-#         axes.append(torch.linspace(0, 1, s))
+#dense grid
+Y_interp = torch.zeros((np.prod(mri_image.shape) * config.interp_factor, 1))
+axes = []
+for idx, s in enumerate(mri_image.shape):
+    if idx == (len(mri_image.shape) - 1):
+        axes.append(torch.linspace(0, 1, s * config.interp_factor))        
+    else:
+        axes.append(torch.linspace(0, 1, s))
         
-# mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 
-# mgrid = mgrid.swapaxes(0, 3) #put time to last axe
+coords = torch.FloatTensor(mgrid)
+X_interp = coords.reshape(len(Y_interp), config.dim_in)    
 
-# coords = torch.FloatTensor(mgrid)
-# X_interp = coords.reshape(len(Y_interp), config.dim_in)    
+interp_dataset = torch.utils.data.TensorDataset(X_interp, Y_interp)
+interp_loader = torch.utils.data.DataLoader(interp_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
 
-# interp_dataset = torch.utils.data.TensorDataset(X_interp, Y_interp)
-# interp_loader = torch.utils.data.DataLoader(interp_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
-
-# #create an interpolation
-# interp_1 = torch.concat(trainer_1.predict(model_1, interp_loader))
-# interp_2 = torch.concat(trainer_2.predict(model_2, interp_loader))
-# interp = (interp_1 + interp_2) / 2
+#create an interpolation
+interp_1 = torch.concat(trainer.predict(model_1, interp_loader))
+interp_2 = torch.concat(trainer.predict(model_2, interp_loader))
+interp = (interp_1 + interp_2) / 2
             
-# interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3] * config.interp_factor))
-# interp_im = interp_im.detach().cpu().numpy()
-# interp_im = np.array(interp_im, dtype=np.float32)
-# nib.save(nib.Nifti1Image(interp_im, affine=np.eye(4)), filepath + 'interpolation.nii.gz')
+interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3] * config.interp_factor))
+interp_im = interp_im.detach().cpu().numpy()
+interp_im = np.array(interp_im, dtype=np.float32)
+nib.save(nib.Nifti1Image(interp_im, affine=np.eye(4)), filepath + 'interpolation.nii.gz')
 
 config.export_to_txt(file_path=filepath)
 
