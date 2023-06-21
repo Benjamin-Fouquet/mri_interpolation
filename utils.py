@@ -11,6 +11,16 @@ from scipy.ndimage import convolve, distance_transform_cdt, map_coordinates
 
 import torchio as tio
 
+def create_mgrid(shape: tuple[int]):
+    '''
+    Create mgrid of arbitrary dimension
+    '''
+    axes = []
+    for s in shape:
+        axes.append(torch.linspace(0, 1, s))
+
+    mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+    return mgrid
 
 def show_slices(
     image: Union[np.ndarray, tio.data.image.ScalarImage, nib.nifti1.Nifti1Image]

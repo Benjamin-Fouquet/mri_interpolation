@@ -88,7 +88,7 @@ class SirenNet(pl.LightningModule):
         dim_out: dimension of output
         num_layers: number of layers
         w0: multiplying factor so that f(x) = sin(w0 * x) between layers. Recommended value, 30.0
-        w0_initial: see w0, recommended value 30.0 as per paper (ref to be found)
+        w0_initial: see w0, recommended value 30.0 as per paper (See paper 'Implicit Neural Representations with Periodic Activation Functions' sec. 3.2, final paragraph, and supplement Sec. 1.5 for discussion of factor 30)
         use_bias: if bias is used between layers, usually set to True
         final_activation: flexible last activation for tasks other than interpolation. None means identity
         lr: recommended 1e-4
@@ -281,7 +281,7 @@ class FourierNet(pl.LightningModule):
         return self(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr) ,#weight_decay=1e-5)
         return optimizer
 
     def set_parameters(self, theta):
