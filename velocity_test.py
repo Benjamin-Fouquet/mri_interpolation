@@ -34,6 +34,7 @@ Reimplement delta calculation to have a true convergence on networks.
 import trimesh
 import numpy as np
 import nibabel as nib
+import nibabel.processing as proc
 from skimage import measure
 from torch.utils.data import TensorDataset, DataLoader
 import torch
@@ -431,3 +432,32 @@ for i in range(t_range):
     pred_i = pred[24576 * i:24576 * (i + 1)] #first cube
     predmesh = trimesh.Trimesh(vertices=pred_i.detach().cpu().numpy(), faces=faces, vertex_normals=normals)
     predmesh.export(model.logger.log_dir + '/' + f'pred{i}.stl')
+    
+    
+'''
+anke extraction. 
+'''
+mri_path = '/home/benjamin/Documents/Datasets/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+image = nib.load(mri_path)
+data = image.get_fdata(dtype=np.float32)
+
+image = nib.Nifti1Image(dataobj=data, affine=np.eye(4))
+
+resample = proc.resample_to_output(in_img=image.slicer[..., 10], voxel_sizes=(1, 1, 6 / 352))
+resample.shape
+nib.save(resample, 'out.nii.gz')
+
+data = resample.get_fdata(dtype=np.float32)
+
+def nii_2_mesh(data, output_path='output.stl'):
+    #need masking ? Resampling to isotrope also
+    data = data / data.max()
+    mask = (data > 0.3) * 1.0
+    verts, faces, normals, values = measure.marching_cubes(mask, 0)
+    mesh = trimesh.Trimesh(vertices=verts, faces=faces, vertex_normals=normals)
+    mesh.show()
+
+nii_2_mesh(data)
+
+
+
