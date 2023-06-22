@@ -308,6 +308,7 @@ Kernel smoothing 1D does not work, try 3D (mutliply anchor slices first if neede
 # trainer.fit(model, train_loader)
 
 filepath = model.logger.log_dir + '/'
+config.log = str(model.logger.log_dir)
 
 #create a prediction
 pred = torch.concat(trainer.predict(model, test_loader))

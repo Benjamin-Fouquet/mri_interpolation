@@ -28,6 +28,7 @@ torch.manual_seed(1337)
 @dataclass
 class BaseConfig:
     checkpoint_path = None #'lightning_logs/version_25/checkpoints/epoch=49-step=11200.ckpt'
+    log: str = None
     # image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
     image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
@@ -39,7 +40,7 @@ class BaseConfig:
     # Network parameters
     encoder_type: str = 'siren' #   
     n_frequencies: int = 32 if encoder_type == 'tcnn' else 1408 #for classic, n_out = 2 * n_freq. For tcnn, n_out = 2 * n_freq * dim_in
-    sigma: float = 8.0
+    sigma: float = 20.0
     n_frequencies_t: int = 4 if encoder_type == 'tcnn' else 30
     sigma_t: float = 2.0
     dim_in: int = len(image_shape)
@@ -217,7 +218,7 @@ class FreqMLP(pl.LightningModule):
 
         # self.encoder = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
         if self.encoder_type == 'siren':
-            self.encoder = Siren(dim_in=(self.dim_in - 1),dim_out=self.n_frequencies, is_first=True, w0=10.0, c=self.sigma)
+            self.encoder = Siren(dim_in=(self.dim_in - 1),dim_out=self.n_frequencies, is_first=True, w0=30.0, c=self.sigma)
             self.encoder_t = Siren(dim_in=1 ,dim_out=self.n_frequencies_t, is_first=True, w0=30.0, c=self.sigma_t)
             self.encoding_dim_out = self.n_frequencies + self.n_frequencies_t
             
@@ -495,6 +496,7 @@ trainer = pl.Trainer(
 trainer.fit(model, train_loader)
 
 filepath = model.logger.log_dir + '/'
+config.log = str(model.logger.log_dir)
 
 #create a prediction
 pred = torch.concat(trainer.predict(model, test_loader))
