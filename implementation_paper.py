@@ -31,15 +31,17 @@ class BaseConfig:
     # image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
     image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
-    batch_size: int = 50000 * 15 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 40 * 15
+    batch_size: int = 50000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 50
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
     # Network parameters
     encoder_type: str = 'siren' #   
-    n_frequencies: int = 32 if encoder_type == 'tcnn' else 704 #for classic, n_out = 2 * n_freq. For tcnn, n_out = 2 * n_freq * dim_in
+    n_frequencies: int = 32 if encoder_type == 'tcnn' else 1408 #for classic, n_out = 2 * n_freq. For tcnn, n_out = 2 * n_freq * dim_in
+    sigma: float = 8.0
     n_frequencies_t: int = 4 if encoder_type == 'tcnn' else 30
+    sigma_t: float = 2.0
     dim_in: int = len(image_shape)
     dim_hidden: int = 64 
     dim_out: int = 1
@@ -192,7 +194,9 @@ class FreqMLP(pl.LightningModule):
         skip_connections,
         encoder_type,
         n_frequencies,
+        sigma,
         n_frequencies_t,
+        sigma_t,
         lr,
         *args,
         **kwargs
@@ -205,14 +209,16 @@ class FreqMLP(pl.LightningModule):
         self.skip_connections = skip_connections #index of skip connections, starting from 0
         self.lr = lr
         self.n_frequencies = n_frequencies
+        self.sigma = sigma
         self.n_frequencies_t = n_frequencies_t
+        self.sigma_t = sigma_t
         self.encoder_type = encoder_type
         self.second_training = False
 
         # self.encoder = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
         if self.encoder_type == 'siren':
-            self.encoder = Siren(dim_in=(self.dim_in - 1),dim_out=self.n_frequencies, is_first=True, w0=30.0, c=8.0)
-            self.encoder_t = Siren(dim_in=1 ,dim_out=self.n_frequencies_t, is_first=True, w0=30.0, c=2.0)
+            self.encoder = Siren(dim_in=(self.dim_in - 1),dim_out=self.n_frequencies, is_first=True, w0=10.0, c=self.sigma)
+            self.encoder_t = Siren(dim_in=1 ,dim_out=self.n_frequencies_t, is_first=True, w0=30.0, c=self.sigma_t)
             self.encoding_dim_out = self.n_frequencies + self.n_frequencies_t
             
         elif self.encoder_type == 'tcnn': #if tcnn is especially required, set it TODO: getattr more elegant
@@ -225,8 +231,8 @@ class FreqMLP(pl.LightningModule):
             # b = rff.functional.sample_b(sigma=10.0, size=self.n_frequencies + (self.dim_in,)).reshape(-1, 4)
             # self.encoder = rff.layers.GaussianEncoding(b=b)
             # self.encoder = rff.layers.GaussianEncoding(sigma=10.0, input_size=(self.dim_in), encoded_size=self.n_frequencies)
-            self.encoder = rff.layers.GaussianEncoding(sigma=8.0, input_size=(self.dim_in - 1), encoded_size=self.n_frequencies)
-            self.encoder_t = rff.layers.GaussianEncoding(sigma=2.0, input_size=1, encoded_size=self.n_frequencies_t)
+            self.encoder = rff.layers.GaussianEncoding(sigma=self.sigma, input_size=(self.dim_in - 1), encoded_size=self.n_frequencies)
+            self.encoder_t = rff.layers.GaussianEncoding(sigma=self.sigma_t, input_size=1, encoded_size=self.n_frequencies_t)
             self.encoding_dim_out = self.n_frequencies * 2 + self.n_frequencies_t * 2
         else:
             print('encoder type not recognized')
@@ -423,7 +429,9 @@ if config.checkpoint_path is not None:
                     n_layers=config.num_layers, 
                     skip_connections=config.skip_connections,
                     n_frequencies=config.n_frequencies,
-                    n_frequencies_t=config.n_frequencies_t,                
+                    sigma=config.sigma,
+                    n_frequencies_t=config.n_frequencies_t,
+                    sigma_t=config.sigma_t,                
                     encoder_type=config.encoder_type,
                     lr=config.lr)  
     
@@ -434,9 +442,12 @@ else:
                     n_layers=config.num_layers, 
                     skip_connections=config.skip_connections,
                     n_frequencies=config.n_frequencies,
-                    n_frequencies_t=config.n_frequencies_t,                
+                    sigma=config.sigma,
+                    n_frequencies_t=config.n_frequencies_t,
+                    sigma_t=config.sigma_t,                
                     encoder_type=config.encoder_type,
-                    lr=config.lr)   
+                    lr=config.lr)  
+ 
 
 Y = torch.FloatTensor(data).reshape(-1, 1)
 Y = Y / Y.max()
