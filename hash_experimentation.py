@@ -35,6 +35,7 @@ class BaseConfig:
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
+    encoder_type: str = 'tcnn_hash' #   
     # Network parameters
     n_levels: int = 20
     n_features_per_level: int = 2
