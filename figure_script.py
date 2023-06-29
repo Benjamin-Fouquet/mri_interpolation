@@ -1,34 +1,49 @@
-from typing import List, Optional, Union
-from pytorch_lightning.utilities.types import LRSchedulerTypeUnion
-import tinycudann as tcnn 
-import torch
-import pytorch_lightning as pl 
-import torch.nn.functional as F
-import json
 import nibabel as nib 
 from dataclasses import dataclass
 import os
-from types import MappingProxyType
-import numpy as np
-import math
-import rff
-import argparse
-from torch.utils.tensorboard import SummaryWriter
-import torch.nn
-from functools import lru_cache
-import torch.utils.data
 import matplotlib.pyplot as plt
+import imageio
+
+log_number = 436
+log_path = f'/home/benjamin/results_repaper/version_{log_number}/' 
+
+im = nib.load(log_path + 'interpolation.nii.gz').get_fdata()
+
+if len(im.shape) == 4:
+    im = im[:,:,3,:]
 
 
-for idx, row in enumerate(im):
-    im[idx] = np.sin(idx)
+fig, axes = plt.subplots(6, 5)
 
-plt.imshow(im)
-plt.
-plt.savefig('out.png')
+for j in range(5):
+    for i in range(6):
+        data = im[..., (j * 6 + i)]
+        axes[i][j].imshow(data.T, origin="lower", cmap="gray")
 
-axes = []
-for s in im.shape:
-    axes.append(torch.linspace(0, 1, s))
+
+fig.suptitle('Interpolation hash 3D + t aniso', fontsize=16)        
+plt.savefig(log_path + 'interpolation.png')
+
+
+filenames = []
+
+for idx in range(im.shape[-1]):
+    plt.imshow(im[..., idx].T, origin="lower", cmap="gray")
+    filename = f'file_{idx}.png'
+    plt.savefig(filename)
+    plt.close()
+    filenames.append(filename)
     
-mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+# build gif
+with imageio.get_writer(log_path + 'interpolation.gif', mode='I') as writer:
+    for filename in filenames:
+        image = imageio.imread(filename)
+        writer.append_data(image)
+        
+# Remove files
+for filename in set(filenames):
+    os.remove(filename)
+
+
+        
+
