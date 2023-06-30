@@ -22,6 +22,9 @@ from torch.utils.tensorboard import SummaryWriter
 from math import pi
 import torch.utils.data
 import matplotlib.pyplot as plt
+import optuna
+import logging
+import sys
 
 torch.manual_seed(1337)
 
@@ -32,17 +35,19 @@ class BaseConfig:
     # image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
     image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
-    batch_size: int = 50000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 50
+    batch_size: int = 250000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 30
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
     # Network parameters
-    encoder_type: str = 'rff' #   
-    n_frequencies: int = 32 if encoder_type == 'tcnn' else 704 #for classic, n_out = 2 * n_freq. For tcnn, n_out = 2 * n_freq * dim_in
-    sigma: float = 8.0
+    encoder_type: str = 'siren' #   
+    n_frequencies: int = 32 if encoder_type == 'tcnn' else 352 #for classic, n_out = 2 * n_freq. For tcnn, n_out = 2 * n_freq * dim_in
+    sigma: float = 20.0
+    w0: float = 30.0
     n_frequencies_t: int = 4 if encoder_type == 'tcnn' else 30
-    sigma_t: float = 2.2
+    sigma_t: float = 2.0
+    w0_t: float = 30.0
     dim_in: int = len(image_shape)
     dim_hidden: int = 64 
     dim_out: int = 1
@@ -196,7 +201,9 @@ class FreqMLP(pl.LightningModule):
         encoder_type,
         n_frequencies,
         sigma,
+        w0,
         n_frequencies_t,
+        w0_t,
         sigma_t,
         lr,
         *args,
@@ -211,15 +218,17 @@ class FreqMLP(pl.LightningModule):
         self.lr = lr
         self.n_frequencies = n_frequencies
         self.sigma = sigma
+        self.w0 = w0
         self.n_frequencies_t = n_frequencies_t
+        self.w0_t = w0_t
         self.sigma_t = sigma_t
         self.encoder_type = encoder_type
         self.second_training = False
 
         # self.encoder = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
         if self.encoder_type == 'siren':
-            self.encoder = Siren(dim_in=(self.dim_in - 1),dim_out=self.n_frequencies, is_first=True, w0=50.0, c=self.sigma)
-            self.encoder_t = Siren(dim_in=1 ,dim_out=self.n_frequencies_t, is_first=True, w0=75.0, c=self.sigma_t)
+            self.encoder = torch.nn.Sequential(Siren(dim_in=(self.dim_in - 1),dim_out=self.n_frequencies, is_first=True, w0=self.w0, c=self.sigma), Siren(dim_in=(self.dim_in - 1),dim_out=self.n_frequencies, is_first=False, w0=self.w0, c=self.sigma))
+            self.encoder_t = Siren(dim_in=1 ,dim_out=self.n_frequencies_t, is_first=True, w0=self.w0_t, c=self.sigma_t)
             self.encoding_dim_out = self.n_frequencies + self.n_frequencies_t
             
         elif self.encoder_type == 'tcnn': #if tcnn is especially required, set it TODO: getattr more elegant
@@ -296,6 +305,7 @@ class FreqMLP(pl.LightningModule):
         y_pred = self.forward(x)
         loss = F.mse_loss(y_pred, y)
         self.log("train_loss", loss)
+        self.final_loss = float(loss.detach().cpu().numpy()) #parameter used for optuna
         return loss
     
     def predict_step(self, batch, batch_idx):
@@ -312,144 +322,14 @@ class FreqMLP(pl.LightningModule):
         writer.add_text(text_string=str(config), tag='configuration')
         writer.close()
         # print(str(model.lr_schedulers().get_last_lr()))
-    
-# class FreqMLPTwo(pl.LightningModule):
-    # '''
-    # Separated Guassian encoding for D and T
-    # '''
-    # def __init__(
-    #     self,
-    #     dim_in,
-    #     dim_hidden,
-    #     dim_out,
-    #     n_layers,
-    #     skip_connections,
-    #     encoder_type,
-    #     n_frequencies,
-    #     n_frequencies_t,
-    #     lr,
-    #     *args,
-    #     **kwargs
-    # ):
-    #     super().__init__()
-    #     self.dim_in = dim_in
-    #     self.dim_hidden = dim_hidden
-    #     self.dim_out = dim_out
-    #     self.n_layers = n_layers
-    #     self.skip_connections = skip_connections #index of skip connections, starting from 0
-    #     self.lr = lr
-    #     self.n_frequencies = n_frequencies
-    #     self.n_frequencies_t = n_frequencies_t
-    #     self.encoder_type = encoder_type
-
-    #     # self.encoder = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
-    #     if self.encoder_type == 'tcnn': #if tcnn is especially required, set it TODO: getattr more elegant
-    #         #create the dictionary
-    #         self.encoder = tcnn.Encoding(n_input_dims=(self.dim_in - 1), encoding_config={'otype': 'Frequency', 'n_frequencies': self.n_frequencies}, dtype=torch.float32)
-    #         self.encoder_t = tcnn.Encoding(n_input_dims=1, encoding_config={'otype': 'Frequency', 'n_frequencies': self.n_frequencies_t}, dtype=torch.float32)
-    #     elif self.encoder_type == 'rff': #fallback to classic
-    #         self.encoder = torch.nn.ModuleList()
-    #         for i in range(4):
-    #             self.encoder.append(rff.layers.GaussianEncoding(sigma=10.0, input_size=1, encoded_size=self.n_frequencies if i < 3 else self.n_frequencies_t))
-    #     else:
-    #         self.encoder =  GaussianFourierFeatureTransform(num_input_channels=(self.dim_in - 1) , mapping_size=n_frequencies)
-    #         self.encoder_t =  GaussianFourierFeatureTransform(num_input_channels=1 ,mapping_size=n_frequencies_t)
-            
-    #     self.encoding_dim_out = (self.n_frequencies * 2 * (self.dim_in - 1) + self.n_frequencies_t * 2) if isinstance(self.encoder, tcnn.Encoding) else (self.n_frequencies * 6 + self.n_frequencies_t * 2)
-    #     # self.encoder = torch.nn.Sequential(Siren(dim_in=self.dim_in, dim_out=self.dim_in * 2 * config['encoding']['n_frequencies']), Siren(dim_in=self.dim_in * 2 * config['encoding']['n_frequencies'], dim_out=self.dim_in * 2 * config['encoding']['n_frequencies']))
-    #     # self.decoder = tcnn.Network(n_input_dims=self.encoder.n_output_dims, n_output_dims=dim_out, network_config=config['network'])
-    #     self.decoder = torch.nn.ModuleList()
-    #     for i in range(self.n_layers):
-    #         if i == 0:
-    #             in_features = self.encoding_dim_out
-    #         elif i in self.skip_connections:
-    #             in_features = self.encoding_dim_out + self.dim_hidden
-    #         else:
-    #             in_features = self.dim_hidden
-    #         block = torch.nn.Sequential(
-    #             torch.nn.Linear(in_features=in_features, out_features=self.dim_out if i == (self.n_layers - 1) else self.dim_hidden),
-    #             torch.nn.BatchNorm1d(num_features=self.dim_out if i == (self.n_layers - 1) else self.dim_hidden), #you can do batochnorm 3D + 1D and cat after
-    #             # torch.nn.ReLU()
-    #             torch.nn.GELU()
-    #         )
-    #         self.decoder.append(block)         
-
-    # def forward(self, x):
-    #     '''Forward for 1D encoding in all directions'''
-    #     x = torch.hstack(([self.encoder[idx](x.T[idx].unsqueeze(-1)) for idx in range(4)]))
-    #     if isinstance(self.encoder, GaussianFourierFeatureTransform):
-    #         x = x.squeeze(-1).squeeze(-1)
-    #     skip = x.clone()
-    #     for idx, layer in enumerate(self.decoder):
-    #         if idx in self.skip_connections:
-    #             x = torch.hstack((skip, x))
-    #         x = layer(x)
-    #     return x 
-
-    # def configure_optimizers(self):
-    #     self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-5) #weight_decay=1e-5
-    #     return self.optimizer
-
-    # def training_step(self, batch, batch_idx):
-    #     x, y = batch
-    #     y_pred = self.forward(x)
-
-    #     loss = F.mse_loss(y_pred, y)
-
-    #     self.log("train_loss", loss)
-    #     return loss
-    
-    # def predict_step(self, batch, batch_idx):
-    #     x, y = batch
-    #     y_pred = self.forward(x)
-    #     return y_pred
-    
-    # def lr_schedulers(self) -> LRSchedulerTypeUnion | List[LRSchedulerTypeUnion] | None:
-    #     self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=self.optimizer, T_max=10, verbose=True)
-    #     return self.scheduler
-    
-    # def on_train_end(self) -> None:
-    #     writer = SummaryWriter(log_dir=self.logger.log_dir)
-    #     writer.add_text(text_string=str(config), tag='configuration')
-    #     writer.close()
-    #     # print(str(model.lr_schedulers().get_last_lr()))
-        
+           
 mri_image = nib.load(config.image_path)
 
 data = mri_image.get_fdata(dtype=np.float32)
 data = data[:,:,:,:] #optional line for doing 3D and accelerate prototyping
 config.image_shape = data.shape
 config.dim_in = len(data.shape)
-
-if config.checkpoint_path is not None:
-    model = FreqMLP.load_from_checkpoint(
-                    config.checkpoint_path,
-                    dim_in=config.dim_in, 
-                    dim_hidden=config.dim_hidden, 
-                    dim_out=config.dim_out, 
-                    n_layers=config.num_layers, 
-                    skip_connections=config.skip_connections,
-                    n_frequencies=config.n_frequencies,
-                    sigma=config.sigma,
-                    n_frequencies_t=config.n_frequencies_t,
-                    sigma_t=config.sigma_t,                
-                    encoder_type=config.encoder_type,
-                    lr=config.lr)  
-    
-else:
-    model = FreqMLP(dim_in=config.dim_in, 
-                    dim_hidden=config.dim_hidden, 
-                    dim_out=config.dim_out, 
-                    n_layers=config.num_layers, 
-                    skip_connections=config.skip_connections,
-                    n_frequencies=config.n_frequencies,
-                    sigma=config.sigma,
-                    n_frequencies_t=config.n_frequencies_t,
-                    sigma_t=config.sigma_t,                
-                    encoder_type=config.encoder_type,
-                    lr=config.lr)  
  
-
 Y = torch.FloatTensor(data).reshape(-1, 1)
 Y = Y / Y.max()
 
@@ -468,60 +348,62 @@ train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size
 
 test_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
 
-# #dense grid
-Y_interp = torch.zeros((np.prod(config.image_shape) * config.interp_factor, 1))
-axes = []
-for idx, s in enumerate(config.image_shape):
-    if idx == (len(config.image_shape) - 1):
-        axes.append(torch.linspace(0, 1, s * config.interp_factor))        
-    else:
-        axes.append(torch.linspace(0, 1, s))
-        
-mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
+study_name = "stacked_siren_study"  # Unique identifier of the study.
+storage_name = f"sqlite:///{study_name}.db"
 
-coords = torch.FloatTensor(mgrid)
-X_interp = coords.reshape(len(Y_interp), config.dim_in)    
-
-interp_dataset = torch.utils.data.TensorDataset(X_interp, Y_interp)
-interp_loader = torch.utils.data.DataLoader(interp_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
+def objective(trial):
+    #parameters to search
+    config.n_frequencies = trial.suggest_int("n_frequencies", 64, 256)
+    config.sigma = trial.suggest_float("sigma", 2, 30)
+    config.w0 = trial.suggest_float("w0", 1.0, 50.0)
+    config.n_frequencies_t = trial.suggest_int("n_frequencies_t", 5, 30)
+    config.sigma_t = trial.suggest_float("sigma_t", 1, 10)
+    config.w0_t = trial.suggest_float("w0_t", 1.0, 50.0)
+    config.num_layers = trial.suggest_int("num_layers", 3, 10)
+    config.dim_hidden = trial.suggest_int('dim_hidden', 32, 512)
+    
+    model = FreqMLP(dim_in=config.dim_in, 
+                    dim_hidden=config.dim_hidden, 
+                    dim_out=config.dim_out, 
+                    n_layers=config.num_layers, 
+                    skip_connections=config.skip_connections,
+                    n_frequencies=config.n_frequencies,
+                    sigma=config.sigma,
+                    w0=config.w0,
+                    n_frequencies_t=config.n_frequencies_t,
+                    sigma_t=config.sigma_t,
+                    w0_t=config.w0_t,                
+                    encoder_type=config.encoder_type,
+                    lr=config.lr) 
+    
    
-trainer = pl.Trainer(
-    gpus=config.device,
-    max_epochs=config.epochs,
-    accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
-    precision=32,
-    # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
-)
+    trainer = pl.Trainer(
+        gpus=config.device,
+        max_epochs=config.epochs,
+        accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
+        precision=32,
+        # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
+    )
 
-trainer.fit(model, train_loader)
+    trainer.fit(model, train_loader)
+    
+    return model.final_loss
 
-filepath = model.logger.log_dir + '/'
-config.log = str(model.logger.version)
+study = optuna.create_study(direction='minimize', study_name=study_name, storage=storage_name, load_if_exists=True)
+study.optimize(objective, n_trials=10)
 
-#create a prediction
-pred = torch.concat(trainer.predict(model, test_loader))
-            
-im = pred.reshape(config.image_shape)
-im = im.detach().cpu().numpy()
-im = np.array(im, dtype=np.float32)
-if len(im.shape) == 2:
-    plt.imshow(im.T)
-    plt.savefig(filepath + 'pred.png')
-else:
-    nib.save(nib.Nifti1Image(im, affine=np.eye(4)), filepath + 'pred.nii.gz')
+filepath = 'optuna_studies/'
 
-# #create an interpolation
-interp = torch.concat(trainer.predict(model, interp_loader))
-       
-if len(data.shape) == 3:     
-    interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[3] * config.interp_factor))
-if len(data.shape) == 4:
-    interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3] * config.interp_factor))
-interp_im = interp_im.detach().cpu().numpy()
-interp_im = np.array(interp_im, dtype=np.float32)
-nib.save(nib.Nifti1Image(interp_im, affine=np.eye(4)), filepath + 'interpolation.nii.gz')
+with open(filepath + 'best_params_stacked_sirenMLP.txt', 'w') as f:
+    print(study.best_params, file=f)
 
-config.export_to_txt(file_path=filepath)
+study.trials_dataframe().to_csv(filepath + 'stacked_sirenMLP_tests.csv')
+
+
+
+
+
             
 
 
