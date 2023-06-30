@@ -435,3 +435,59 @@ fig2 = plt.plot(range(max_iter + epochs2), log_model_losses)
 fig3 = plt.plot(range(epochs2), transfert_losses)
 
 plt.show()
+
+class MAML:
+    '''
+    catch losses ?
+    '''
+    def __init__(self, model) -> None:
+        self.optimizee = model
+        self.optimizer = Optimizer(input_shape, hidden_size, num_layers=2, preproc=False)
+        
+    def optimize(self, steps):
+        model_func, model_params = functorch.make_functional(model)
+
+        optimizer_list = [
+            Optimizer(input_shape=parameter.shape, hidden_size=np.prod(parameter.shape) * 10)
+            for idx, parameter in enumerate(model_params)
+        ]
+        opt = torch.optim.Adam([p for g in optimizer_list for p in g.parameters()], lr=1e-3)
+
+        log_outer_losses = []
+
+        for step in range(steps):
+            theta_zero = tuple(model_params)
+            theta = list(theta_zero)
+            log_model_losses = []
+            for optimizer in optimizer_list:
+                optimizer.reset_state()
+            for it in range(max_iter):
+                x, y = next(iter(train_loader))
+                y_pred = model_func(theta, x)
+                model_loss = F.mse_loss(y, y_pred)
+                theta_gradients = torch.autograd.grad(
+                    model_loss, theta, create_graph=True, allow_unused=True
+                )
+
+                for i in range(len(theta)):
+                    theta_update = optimizer_list[i](
+                        theta_gradients[i]
+                        .reshape(1, np.prod(theta_gradients[i].shape))
+                        .detach()
+                    )
+                    theta_update = theta_update.reshape(theta[i].shape)
+                    theta[i] = theta[i] - theta_update
+
+                if it == 0:
+                    outer_loss = model_loss
+                else:
+                    outer_loss = (
+                        outer_loss + ((it + 1) / max_iter) ** 2 * model_loss
+                    )  # Tests show that weighted the later loss stronger result in better convergence. We indeed want to aim for later loss
+                    # outer_loss = outer_loss + model_loss
+                log_model_losses.append(model_loss.detach().numpy())
+                log_outer_losses.append(outer_loss.detach().numpy())
+
+            opt.zero_grad()
+            outer_loss.backward()
+            opt.step()
