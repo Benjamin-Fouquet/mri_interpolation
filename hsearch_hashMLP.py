@@ -24,6 +24,7 @@ from skimage import metrics
 import optuna
 import logging
 import sys
+from scipy.fft import fftn, ifftn, fftshift
 
 torch.manual_seed(1337)
 
@@ -235,11 +236,13 @@ def objective(trial):
     config.dim_hidden = trial.suggest_int('dim_hidden', 64, 256)
     br_slice = trial.suggest_int('starting_slice_resolution', 2, 6)
     br_time = trial.suggest_int('starting_time_resolution', 4, 15)
-    fr_slice = trial.suggest_int('final_slice_resolution', 6, 12)
-    fr_time = trial.suggest_int('final_time_resolution', 15, 30)
+    fr_slice = trial.suggest_int('final_slice_resolution', 6, 6)
+    fr_time = trial.suggest_int('final_time_resolution', 15, 15)
     config.base_resolution = (64, 64, br_slice, br_time)
     config.finest_resolution = (512, 512, fr_slice, fr_time)
-
+    config.n_levels = trial.suggest_int('n_levels', 8, 32)
+    config.n_features_per_level = trial.suggest_int('n_features_per_level', 1, 4)
+    config.log2_hashmap_size = trial.suggest_int('log2_hashmap_size', 16, 24)
     
     model = HashMLP(dim_in=config.dim_in, 
                     dim_hidden=config.dim_hidden, 
@@ -266,10 +269,23 @@ def objective(trial):
 
     trainer.fit(model, train_loader)
     
+    # #create a prediction
+    # pred = torch.concat(trainer.predict(model, test_loader))
+                
+    # im = pred.reshape(config.image_shape)
+    # im = im.detach().cpu().numpy()
+    # im = np.array(im, dtype=np.float32)
+    
+    #do DFT on prediction
+    # fourier = fftshift(fftn(im))    
+    #quantify high freq components ?
+    
+    #return
+    
     return model.final_loss
 
 study = optuna.create_study(direction='minimize', study_name=study_name, storage=storage_name, load_if_exists=True)
-study.optimize(objective, n_trials=100)
+study.optimize(objective, n_trials=10)
 
 filepath = 'optuna_studies/'
 

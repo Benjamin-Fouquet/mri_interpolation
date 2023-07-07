@@ -1,6 +1,4 @@
 '''
-Implementation 'Continuous Longitudinal Fetus Brain Atlas Construction via Implicit Neural Representation' using tinycuda
-
 current state: Test if the differnetial encoding and reordering of T is beneficial for resutlts. Maybe try first 1 encoder but with reordered T, then dual encoder
 '''
 from typing import List, Optional, Union
@@ -25,6 +23,7 @@ import matplotlib.pyplot as plt
 import optuna
 import logging
 import sys
+from models import Modulator, ModulatedSirenNet
 
 torch.manual_seed(1337)
 
@@ -231,6 +230,11 @@ class FreqMLP(pl.LightningModule):
             self.encoder_t = Siren(dim_in=1 ,dim_out=self.n_frequencies_t, is_first=True, w0=self.w0_t, c=self.sigma_t)
             self.encoding_dim_out = self.n_frequencies + self.n_frequencies_t
             
+        elif self.encoder_type == 'modulated_siren':
+            self.encoder = ModulatedSirenNet(dim_in=(self.dim_in - 1), dim_hidden=self.n_frequencies, dim_out=self.n_frequencies, num_layers=2, w0_initial=self.w0, w0=self.w0, c=self.sigma)
+            self.encoder_t = Siren(dim_in=1 ,dim_out=self.n_frequencies_t, is_first=True, w0=self.w0_t, c=self.sigma_t)
+            self.encoding_dim_out = self.n_frequencies + self.n_frequencies_t
+            
         elif self.encoder_type == 'tcnn': #if tcnn is especially required, set it TODO: getattr more elegant
             self.encoder = tcnn.Encoding(n_input_dims=(self.dim_in - 1), encoding_config={'otype': 'Frequency', 'n_frequencies': self.n_frequencies}, dtype=torch.float32)
             self.encoder_t = tcnn.Encoding(n_input_dims=1, encoding_config={'otype': 'Frequency', 'n_frequencies': self.n_frequencies_t}, dtype=torch.float32)
@@ -349,7 +353,7 @@ train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size
 test_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
 
 optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
-study_name = "stacked_siren_study"  # Unique identifier of the study.
+study_name = "modulated_siren_study"  # Unique identifier of the study.
 storage_name = f"sqlite:///{study_name}.db"
 
 def objective(trial):
@@ -395,16 +399,7 @@ study.optimize(objective, n_trials=1)
 
 filepath = 'optuna_studies/'
 
-with open(filepath + 'best_params_stacked_sirenMLP.txt', 'w') as f:
+with open(filepath + 'best_params_modulated_sirenMLP.txt', 'w') as f:
     print(study.best_params, file=f)
 
-study.trials_dataframe().to_csv(filepath + 'stacked_sirenMLP_tests.csv')
-
-
-
-
-
-            
-
-
-
+study.trials_dataframe().to_csv(filepath + 'modulated_sirenMLP_tests.csv')
