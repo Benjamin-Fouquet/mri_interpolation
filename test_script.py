@@ -3,9 +3,6 @@ import argparse
 from scipy.interpolate import griddata, interpn
 from torch import autograd as ag
 import torch
-import glob
-import nibabel as nib
-from scipy.fft import fftn, ifftn, fftshift, fftfreq
 
 def nii_2_mesh(filename_nii, filename_stl, label):
 
@@ -83,8 +80,7 @@ import math
 import rff
 import argparse
 from torch.utils.tensorboard import SummaryWriter
-import torch.nn
-from functools import lru_cache
+from math import pi
 import torch.utils.data
 import matplotlib.pyplot as plt
 
@@ -92,23 +88,24 @@ torch.manual_seed(1337)
 
 @dataclass
 class BaseConfig:
-    checkpoint_path: Optional[str] = None #'lightning_logs/version_269/checkpoints/epoch=285-step=16874.ckpt' #'lightning_logs/version_384/checkpoints/epoch=99-step=100.ckpt'
+    checkpoint_path = None #'lightning_logs/version_25/checkpoints/epoch=49-step=11200.ckpt'
+    log: str = None
     # image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
     image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
-    batch_size: int = 50000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 15
+    batch_size: int = 30000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 50
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
     # Network parameters
-    encoder_type: str = 'Siren' #   
-    n_frequencies: int = 512  #for classic, n_out = 2 * n_freq. For tcnn, n_out = 2 * n_freq * dim_in
-    n_frequencies_t: int = 8 if encoder_type == 'tcnn' else 16
+    n_encoders: int = 9 
+    n_frequencies: int = 4  #for classic, n_out = 2 * n_freq. For tcnn, n_out = 2 * n_freq * dim_in
+    sigma: float = 2.0
     dim_in: int = len(image_shape)
-    dim_hidden: int = 256 
+    dim_hidden: int = 128
     dim_out: int = 1
-    num_layers: int = 8
+    num_layers: int = 4
     skip_connections: tuple = () #(5, 11,)
     lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1 
     interp_factor: int = 2
@@ -124,9 +121,8 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", help="Number of epochs", type=int, required=False)
     parser.add_argument("--image_path", help="path of image", type=str, required=False)
     parser.add_argument("--encoder_type", help="tcnn or classic", type=str, required=False)
-    parser.add_argument("--dim_hidden", help="size of hidden layers", type=int, required=False)
-    parser.add_argument("--num_layers", help="number of layers", type=int, required=False)
-    
+    parser.add_argument("--n_frequencies", help="number of encoding frequencies", type=int, required=False)
+    parser.add_argument("--n_frequencies_t", help="number of encoding frequencies for time", type=int, required=False)
     args = parser.parse_args()
 
 def export_to_txt(dict: dict, file_path: str = "") -> None:
@@ -144,65 +140,94 @@ for key in args.__dict__:
     if args.__dict__[key] is not None:
         config.__dict__[key] = args.__dict__[key]
 
-#utils for siren
-def exists(val):
-    return val is not None
 
-
-def cast_tuple(val, repeat=1):
-    return val if isinstance(val, tuple) else ((val,) * repeat)
-
-
-class Sine(torch.nn.Module):
-    def __init__(self, w0=30.0):
-        super().__init__()
-        self.w0 = w0
-
-    def forward(self, x):
-        return torch.sin(self.w0 * x)
-
-
-class Siren(torch.nn.Module):
+#freq encoding tiny cuda
+class FreqMLP(pl.LightningModule):
     '''
-    Siren layer
+    Lightning module for HashMLP. 
     '''
     def __init__(
         self,
         dim_in,
+        dim_hidden,
         dim_out,
-        w0=10.0,
-        c=10.0,
-        is_first=False,
-        use_bias=True,
-        activation=None,
+        n_layers,
+        skip_connections,
+        n_encoders,
+        n_frequencies,
+        sigma,
+        lr,
+        *args,
+        **kwargs
     ):
         super().__init__()
         self.dim_in = dim_in
-        self.is_first = is_first
+        self.dim_hidden = dim_hidden
+        self.dim_out = dim_out
+        self.n_layers = n_layers
+        self.skip_connections = skip_connections #index of skip connections, starting from 0
+        self.lr = lr
+        self.n_encoders = n_encoders
+        self.n_frequencies = n_frequencies
+        self.sigma = sigma
 
-        weight = torch.zeros(dim_out, dim_in)
-        phase = torch.zeros(dim_out, dim_in)
-        bias = torch.zeros(dim_out) if use_bias else None
-        self.init_(weight, bias, c=c, w0=w0)
-
-        self.weight = torch.nn.Parameter(weight)
-        self.phase = torch.nn.Parameter(phase)
-        self.bias = torch.nn.Parameter(bias) if use_bias else None
-        self.activation = Sine(w0) if activation is None else activation
-
-    def init_(self, weight, bias, c, w0):
-        dim = self.dim_in
-
-        w_std = (1 / dim) if self.is_first else (math.sqrt(c / dim) / w0)
-        weight.uniform_(-w_std, w_std)
-
-        if exists(bias):
-            bias.uniform_(-w_std, w_std)
+        # self.encoder = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
+        
+        # b = rff.functional.sample_b(sigma=10.0, size=self.n_frequencies)
+        # b = rff.functional.sample_b(sigma=10.0, size=self.n_frequencies + (self.dim_in,)).reshape(-1, 4)
+        # self.encoder = rff.layers.GaussianEncoding(b=b)
+        # self.encoder = rff.layers.GaussianEncoding(sigma=10.0, input_size=(self.dim_in), encoded_size=self.n_frequencies)
+        # self.encoder = rff.layers.GaussianEncoding(sigma=self.sigma, input_size=(self.dim_in - 1), encoded_size=self.n_frequencies)
+        # self.encoder_t = rff.layers.GaussianEncoding(sigma=self.sigma_t, input_size=1, encoded_size=self.n_frequencies_t)
+        # self.encoding_dim_out = self.n_frequencies * 2 + self.n_frequencies_t * 2
+        self.encoder_list = torch.nn.ModuleList(rff.layers.GaussianEncoding(sigma=10.0, input_size=(self.dim_in), encoded_size=self.n_frequencies * (i + 1)) for i in range(self.n_encoders))
+        
+        self.encoding_dim_out = 0
+        for i in range(self.n_encoders):
+            self.encoding_dim_out += ((i + 1) * self.n_frequencies)
+            
+        self.encoding_dim_out *= 2
+        
+        self.decoder = torch.nn.ModuleList()
+        for i in range(self.n_layers):
+            if i == 0:
+                in_features = self.encoding_dim_out
+            elif i in self.skip_connections:
+                in_features = self.encoding_dim_out + self.dim_hidden
+            else:
+                in_features = self.dim_hidden
+            block = torch.nn.Sequential(
+                torch.nn.utils.parametrizations.spectral_norm(torch.nn.Linear(in_features=in_features, out_features=self.dim_out if i == (self.n_layers - 1) else self.dim_hidden), n_power_iterations=4, eps=1e-12, dim=None),
+                # torch.nn.Linear(in_features=in_features, out_features=self.dim_out if i == (self.n_layers - 1) else self.dim_hidden),
+                torch.nn.BatchNorm1d(num_features=self.dim_out if i == (self.n_layers - 1) else self.dim_hidden), #you can do batchnorm 3D + 1D and cat after
+                # torch.nn.ReLU()
+                torch.nn.GELU()
+            )
+            self.decoder.append(block)
+            
 
     def forward(self, x):
-        out = F.linear(x, self.weight, self.bias)
-        out = self.activation(out + self.phase) 
-        return out
+        z = self.encoder_list[0](x)
+        for i in range(1, self.n_encoders):
+            z = torch.hstack((z, self.encoder_list[i](x)))
+        for idx, layer in enumerate(self.decoder):
+            z = layer(z)
+        return z
+
+    def configure_optimizers(self):
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-5) #weight_decay=1e-5
+        return self.optimizer
+
+    def training_step(self, batch, batch_idx):
+        '''
+        TODO: separate reg in second half of training only ?
+        '''
+        x, y = batch
+
+        y_pred = self.forward(x)
+        loss = F.mse_loss(y_pred, y)
+        self.log("train_loss", loss)
+        return loss
     
 siren = Siren(1, 1)
 
@@ -223,6 +248,9 @@ def func(x):
     return 1 if x > 0.2 and x < 0.6 else 0
 
 
+
+
+
 enco1 = GaussianFourierFeatureTransform(2)
 
 enco2 = rff.layers.GaussianEncoding(sigma=10.0, input_size=2, encoded_size=256)
@@ -234,77 +262,7 @@ plt.imshow(im)
 plt.savefig('out.png')
 
 axes = []
-for s in im.shape:
+for s in config.image_shape:
     axes.append(torch.linspace(0, 1, s))
-    
+
 mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
-
-
-import nibabel as nib
-import numpy as np
-import matplotlib.pyplot as plt
-
-path = '/home/benjamin/results_repaper/version_30/'
-
-image = nib.load(path + 'interpolation.nii.gz')
-data = image.get_fdata(dtype=np.float32)
-
-# data = data[:,:,3,:]
-
-fig, axes = plt.subplots(6, 5)
-
-for j in range(5):
-    for i in range(6):
-        slice = data[..., (j * 6) + i]
-        axes[i][j].imshow(slice.T, origin="lower", cmap="gray") #cmap="gray"
-        # print((j * 6) + i)
-        
-plt.savefig('out.png')
-
-
-#extraction of mean for foot
-
-#glob all the names for movieclear in WD
-path = '/media/benjamin/WD Elements/Patty/sourcedata/'
-
-subjects = glob.glob(path + 'sub*', recursive=True)
-
-#create a list of all images with the name 'MovieClear' in them. Not prefect but you dont need perfect mean
-images_list = []
-for subject in subjects:
-    images_list.append(glob.glob(subject + '/' + '**_MovieClear_**', recursive=True))
-   
-#flatten
-images_list = [item for sublist in images_list for item in sublist] 
-    
-#mean all images in 4D, check if correct resolution
-
-mean = np.zeros((352, 352, 6, 15), dtype=np.float32)
-for path in images_list:
-    try:
-        image = nib.load(path)
-    except:
-        pass
-    
-    if image.shape == (352, 352, 6, 15):
-        mean += image.get_fdata(dtype=np.float32)
-        #do something
-    else:
-        pass
-
-#save
-nib.save(nib.Nifti1Image(mean, affine=image.affine), 'mean_foot_dynamic.nii.gz') 
-
-    
-im = nib.load('/home/benjamin/Documents/Datasets/sub_E01_dynamic_MovieClear_active_run_12.nii.gz').get_fdata()
-
-fourier = fftshift(fftn(im))
-
-#get amplitude ?
-abs = np.sqrt(fourier.real ** 2 + fourier.imag **2)
-
-freq = fftfreq(fourier.size, d=1)
-
-plt.imshow(abs[:,:,3, 7].real)
-plt.show()
-plt.clf()

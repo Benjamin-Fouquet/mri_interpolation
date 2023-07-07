@@ -109,6 +109,7 @@ class SirenNet(pl.LightningModule):
         num_layers: int = 4,
         w0=30.0,
         w0_initial=30.0,
+        c=6.0,
         use_bias=True,
         final_activation=None,
         lr=1e-4,
@@ -118,6 +119,7 @@ class SirenNet(pl.LightningModule):
         super().__init__()
         self.num_layers = num_layers
         self.dim_hidden = dim_hidden
+        self.c = c
         self.losses = []
         self.lr = lr
 
@@ -132,6 +134,7 @@ class SirenNet(pl.LightningModule):
                     dim_in=layer_dim_in,
                     dim_out=dim_hidden,
                     w0=layer_w0,
+                    c=self.c,
                     use_bias=use_bias,
                     is_first=is_first,
                 )
@@ -144,6 +147,7 @@ class SirenNet(pl.LightningModule):
             dim_in=dim_hidden,
             dim_out=dim_out,
             w0=w0,
+            c=self.c,
             use_bias=use_bias,
             activation=final_activation,
         )
@@ -462,6 +466,7 @@ class ModulatedSirenNet(pl.LightningModule):
         num_layers=4,
         w0=30.0,
         w0_initial=30.0,
+        c=6.0,
         use_bias=True,
         final_activation=None,
         lr=1e-4,
@@ -475,6 +480,7 @@ class ModulatedSirenNet(pl.LightningModule):
         self.num_layers = num_layers
         self.w0 = w0
         self.w0_initial = w0_initial
+        self.c = c
         self.use_bias = use_bias
         self.final_activation = final_activation
         self.lr = lr
@@ -491,6 +497,7 @@ class ModulatedSirenNet(pl.LightningModule):
             num_layers=self.num_layers,
             w0=self.w0,
             w0_initial=self.w0_initial,
+            c=self.c,
             use_bias=self.use_bias,
             final_activation=self.final_activation,
             lr=self.lr,

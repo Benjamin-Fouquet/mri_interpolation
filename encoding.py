@@ -306,13 +306,22 @@ class MultiResHashGridV2(pl.LightningModule):
         return torch.cat([level(x) for level in self.levels], dim=-1)
 
 
-encoder = MultiResHashGridV2(
+encoder1 = MultiResHashGrid(
     dim=4,
     n_levels=4,
     n_features_per_level=2,
     log2_hashmap_size=19,
-    base_resolution=(16, 16, 16, 16),
-    finest_resolution=(512, 512, 512, 512),
+    base_resolution=16,
+    finest_resolution=512,
 )
 
-encoder(torch.randn(10, 4))
+encoder2 = MultiResHashGridV2(
+    dim=4,
+    n_levels=4,
+    n_features_per_level=2,
+    log2_hashmap_size=19,
+    base_resolution=(16, 16, 16, 4),
+    finest_resolution=(512, 512, 512, 30),
+)
+
+encoder1(torch.randn(10, 4))
