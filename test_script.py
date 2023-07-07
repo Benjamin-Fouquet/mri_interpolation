@@ -3,6 +3,9 @@ import argparse
 from scipy.interpolate import griddata, interpn
 from torch import autograd as ag
 import torch
+import glob
+import nibabel as nib
+from scipy.fft import fftn, ifftn, fftshift, fftfreq
 
 def nii_2_mesh(filename_nii, filename_stl, label):
 
@@ -220,9 +223,6 @@ def func(x):
     return 1 if x > 0.2 and x < 0.6 else 0
 
 
-
-
-
 enco1 = GaussianFourierFeatureTransform(2)
 
 enco2 = rff.layers.GaussianEncoding(sigma=10.0, input_size=2, encoded_size=256)
@@ -238,3 +238,73 @@ for s in im.shape:
     axes.append(torch.linspace(0, 1, s))
     
 mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+
+
+import nibabel as nib
+import numpy as np
+import matplotlib.pyplot as plt
+
+path = '/home/benjamin/results_repaper/version_30/'
+
+image = nib.load(path + 'interpolation.nii.gz')
+data = image.get_fdata(dtype=np.float32)
+
+# data = data[:,:,3,:]
+
+fig, axes = plt.subplots(6, 5)
+
+for j in range(5):
+    for i in range(6):
+        slice = data[..., (j * 6) + i]
+        axes[i][j].imshow(slice.T, origin="lower", cmap="gray") #cmap="gray"
+        # print((j * 6) + i)
+        
+plt.savefig('out.png')
+
+
+#extraction of mean for foot
+
+#glob all the names for movieclear in WD
+path = '/media/benjamin/WD Elements/Patty/sourcedata/'
+
+subjects = glob.glob(path + 'sub*', recursive=True)
+
+#create a list of all images with the name 'MovieClear' in them. Not prefect but you dont need perfect mean
+images_list = []
+for subject in subjects:
+    images_list.append(glob.glob(subject + '/' + '**_MovieClear_**', recursive=True))
+   
+#flatten
+images_list = [item for sublist in images_list for item in sublist] 
+    
+#mean all images in 4D, check if correct resolution
+
+mean = np.zeros((352, 352, 6, 15), dtype=np.float32)
+for path in images_list:
+    try:
+        image = nib.load(path)
+    except:
+        pass
+    
+    if image.shape == (352, 352, 6, 15):
+        mean += image.get_fdata(dtype=np.float32)
+        #do something
+    else:
+        pass
+
+#save
+nib.save(nib.Nifti1Image(mean, affine=image.affine), 'mean_foot_dynamic.nii.gz') 
+
+    
+im = nib.load('/home/benjamin/Documents/Datasets/sub_E01_dynamic_MovieClear_active_run_12.nii.gz').get_fdata()
+
+fourier = fftshift(fftn(im))
+
+#get amplitude ?
+abs = np.sqrt(fourier.real ** 2 + fourier.imag **2)
+
+freq = fftfreq(fourier.size, d=1)
+
+plt.imshow(abs[:,:,3, 7].real)
+plt.show()
+plt.clf()
