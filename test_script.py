@@ -274,7 +274,23 @@ interp_im = np.array(interp_im, dtype=np.float32)
 nib.save(nib.Nifti1Image(interp_im, affine=np.eye(4)), filepath + 'interpolation.nii.gz')
 
 config.export_to_txt(file_path=filepath)
-            
+
+#export ground truth from y directly
+gt = torch.zeros(1, 1)
+for batch in test_loader:
+    x, y = batch
+    gt = torch.vstack((gt, y))
+    
+gt = gt[1:]
+gt = gt.detach().cpu().reshape(config.image_shape).numpy()
+
+nib.save(nib.Nifti1Image(gt, affine=np.eye(4)), 'gt_from_y.nii.gz')
+
+for idx, lat in enumerate(lats.T):
+    lat = lat.reshape(config.image_shape)
+    plt.imshow(lat[..., 3])
+    plt.savefig(f'latent_{idx}.png')
+           
 
 
 
