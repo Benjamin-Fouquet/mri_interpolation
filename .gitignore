@@ -27,3 +27,4 @@ interp_frame_0_5_comparison3.png
 interp_frame_0_5.png
 interp_frame_0_6.png
 models.py
+*.db

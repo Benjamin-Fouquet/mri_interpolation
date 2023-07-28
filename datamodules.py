@@ -3,7 +3,6 @@ Datamodules for MRI interpolation. Each module comes with an optional 2D MNIST s
 Data options:
 -MNIST for tests
 -DHCP for real deal
--potentially fabien and/or foetal to be added lated
 TODO:
 -normalisation is manual and hardcoded, not great
 """
@@ -46,6 +45,7 @@ def display_output(batch):
     plt.imshow(y.reshape(28, 28))
     plt.show()
     plt.clf()
+    return None
 
 
 class MNISTDataModule(pl.LightningDataModule):
@@ -147,7 +147,7 @@ class MriImage(Dataset):
             image = nib.load(image_path)
         else:
             image = nib.load(config.image_path)
-        image = image.get_fdata(dtype=np.float32)  # [64:192, 64:192, 100:164]
+        image = image.get_fdata(dtype=np.float32) 
 
         axes = []
         for s in image.shape:
@@ -158,7 +158,7 @@ class MriImage(Dataset):
         # create data tensors
         pixels = torch.FloatTensor(image)
         pixels = pixels.flatten()
-        # normalisation, should be recasted with torch reshape func
+        # normalisation
         pixels = ((pixels - torch.min(pixels)) / (torch.max(pixels) - torch.min(pixels))) #* 2 - 1
         coords = torch.FloatTensor(mgrid)
         coords = coords.reshape(len(pixels), config.dim_in)

@@ -247,10 +247,6 @@ plt.clf()
 def func(x):
     return 1 if x > 0.2 and x < 0.6 else 0
 
-
-
-
-
 enco1 = GaussianFourierFeatureTransform(2)
 
 enco2 = rff.layers.GaussianEncoding(sigma=10.0, input_size=2, encoded_size=256)
@@ -261,8 +257,16 @@ for idx, row in enumerate(im):
 plt.imshow(im)
 plt.savefig('out.png')
 
+
+
 axes = []
 for s in config.image_shape:
     axes.append(torch.linspace(0, 1, s))
 
 mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+
+points = mgrid[:,:,::2,:].reshape(-1, 3)
+values = data[..., ::2].reshape(-1, 1)
+xi = mgrid[:,:,1::2,:].reshape(-1, 3)
+
+interpolation = griddata(points, values, xi, method='linear')

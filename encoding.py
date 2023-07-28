@@ -1,4 +1,4 @@
-# --- bulit in ---
+# --- built in ---
 import math
 
 # --- 3rd party ---
@@ -6,10 +6,13 @@ import numpy as np
 import torch
 from torch import nn
 import pytorch_lightning as pl
+from utils import create_mgrid
 
 # --- my module ---
 
 """
+SOURCE: https://github.com/Ending2015a/hash-grid-encoding
+
 The MIT License (MIT)
 Copyright (c) 2022 Joe Hsiao (Ending2015a)
 
@@ -215,16 +218,12 @@ class _HashGridV2(pl.LightningModule):
         self.register_buffer("bin_mask", bin_mask, persistent=False)
 
     def forward(self, x: torch.Tensor):
-        # if torch.cuda.is_available():
-        #     x = x.to('cuda')
-        #     self.resolution = self.resolution.to('cuda')
-        # x: (b..., dim), torch.float32, range: [0, 1]
-        bdims = len(x.shape[:-1])
-        x = x * self.resolution.to(self.device)
-        xi = x.long()
-        xf = x - xi.float().detach()
-        xi = xi.unsqueeze(dim=-2)  # (b..., 1, dim)
-        xf = xf.unsqueeze(dim=-2)  # (b..., 1, dim)
+        bdims = len(x.shape[:-1]) #used to match the shpe of the mask afterwards
+        x = x * self.resolution.to(self.device) #multiply the 0-1 range by the resolution (giving indices ?)
+        x_int = x.long() #convertion to int, isolate indices ?
+        x_float = x - x_int.float().detach() #decimal part of x
+        x_int = x_int.unsqueeze(dim=-2)  # (batch..., 1, dim)
+        x_float = x_float.unsqueeze(dim=-2)  # (batch..., 1, dim)
         # to match the input batch shape
         bin_mask = self.bin_mask.reshape(
             (1,) * bdims + self.bin_mask.shape
@@ -232,8 +231,8 @@ class _HashGridV2(pl.LightningModule):
         # get neighbors' indices and weights on each dim
         # if torch.cuda.is_available():
         #     bin_mask = bin_mask.to('cuda')
-        inds = torch.where(bin_mask, xi, xi + 1)  # (b..., neig, dim)
-        ws = torch.where(bin_mask, 1 - xf, xf)  # (b...., neig, dim)
+        inds = torch.where(bin_mask, x_int, x_int + 1)  # (b..., neig, dim) #if mask then x_int else x_int + 1. Create list of indices
+        ws = torch.where(bin_mask, 1 - x_float, x_float)  # (b...., neig, dim)
         # aggregate nehgibors' interp weights
         w = ws.prod(dim=-1, keepdim=True)  # (b..., neig, 1)
         # hash neighbors' id and look up table
@@ -288,7 +287,7 @@ class MultiResHashGridV2(pl.LightningModule):
             resolution = []
             for b, br in zip(b_list, base_resolution):
                 resolution.append(math.floor(br * (b ** level_idx)))
-            hashmap_size = min(max(resolution) ** dim, 2 ** log2_hashmap_size)
+            hashmap_size = min(max(resolution) ** dim, 2 ** log2_hashmap_size) #create table of size res ** dim if not exceed 2 ** mapsize
             levels.append(
                 _HashGridV2(
                     dim=dim,
@@ -325,3 +324,6 @@ encoder2 = MultiResHashGridV2(
 )
 
 encoder1(torch.randn(10, 4))
+encoder2(torch.ones(10, 4))
+
+mgrid = create_mgrid(shape=(3, 3, 3))

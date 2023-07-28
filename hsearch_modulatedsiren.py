@@ -1,5 +1,5 @@
 '''
-current state: Test if the differnetial encoding and reordering of T is beneficial for resutlts. Maybe try first 1 encoder but with reordered T, then dual encoder
+hyperparamter search for modulated Siren using optuna
 '''
 from typing import List, Optional, Union
 from pytorch_lightning.utilities.types import LRSchedulerTypeUnion

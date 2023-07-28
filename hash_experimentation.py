@@ -1,5 +1,5 @@
 '''
-For H encoding experimentation and interpolation, dervied from code implementatation
+For H encoding experimentation and interpolation, derived from code implementatation
 
 Implementation 'Continuous Longitudinal Fetus Brain Atlas Construction via Implicit Neural Representation' using tinycuda
 
@@ -32,18 +32,18 @@ class BaseConfig:
     # image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
     image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
-    batch_size: int = 50000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    batch_size: int = 10000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
     epochs: int = 50
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
     encoder_type: str = 'hash' #   
     # Network parameters
-    n_levels: int = 16
+    n_levels: int = 8
     n_features_per_level: int = 2
     log2_hashmap_size: int = 19
-    base_resolution: MappingProxyType = (64, 64, 4,  4)
-    finest_resolution: MappingProxyType = (512, 512, 12, 30)
+    base_resolution: MappingProxyType = (64, 64, 8)
+    finest_resolution: MappingProxyType = (512, 512, 8)
     # base_resolution: int = 64
     # finest_resolution: int = 512
     per_level_scale: int = 1.5
@@ -204,9 +204,12 @@ class HashMLP(pl.LightningModule):
 mri_image = nib.load(config.image_path)
 
 data = mri_image.get_fdata(dtype=np.float32)
-data = data[:,:,:,:]
+data = data[:,:,3,:]
 config.image_shape = data.shape
 config.dim_in = len(data.shape)
+
+#interpolation tests
+data = data[..., ::2]
 
 model = HashMLP(dim_in=config.dim_in, 
                 dim_hidden=config.dim_hidden, 
@@ -232,6 +235,7 @@ for s in config.image_shape:
 mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 
 coords = torch.FloatTensor(mgrid)
+coords = coords[:,:,::2,:]
 X = coords.reshape(len(Y), config.dim_in)
 
 dataset = torch.utils.data.TensorDataset(X, Y)
@@ -241,28 +245,34 @@ train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size
 test_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
 
 #Tinyset, 1 timepoint. TODO: try with 2 later
-tinyY= Y = torch.FloatTensor(data[..., [3, 7, 13]]).reshape(-1, 1)
-# tinyY= Y = torch.FloatTensor(data[..., 7]).reshape(-1, 1)
+# tinyY= Y = torch.FloatTensor(data[..., [3, 7, 13]]).reshape(-1, 1)
+tinyY= Y = torch.FloatTensor(data[..., 4]).reshape(-1, 1)
 tinyY = tinyY / Y.max()   
 
-if len(config.image_shape) == 4:
-    coords = torch.FloatTensor(mgrid[:,:,:,[3, 7, 13],:])
-if len(config.image_shape) == 3:
-    coords = torch.FloatTensor(mgrid[:,:,[3, 7, 13],:])
-# coords = torch.FloatTensor(mgrid[:,:,7,:])
+# if len(config.image_shape) == 4:
+#     coords = torch.FloatTensor(mgrid[:,:,:,[3, 7, 13],:])
+# if len(config.image_shape) == 3:
+#     coords = torch.FloatTensor(mgrid[:,:,[3, 7, 13],:])
+coords = torch.FloatTensor(mgrid[:,:,4,:])
 tinyX = coords.reshape(len(tinyY), config.dim_in)
     
 tinydataset = dataset = torch.utils.data.TensorDataset(tinyX, tinyY)
 tiny_loader = torch.utils.data.DataLoader(tinydataset, batch_size=config.batch_size, shuffle=True, num_workers=config.num_workers)
 
 #dense grid
-Y_interp = torch.zeros((np.prod(config.image_shape) * config.interp_factor, 1))
+# Y_interp = torch.zeros((np.prod(config.image_shape) * config.interp_factor, 1))
+Y_interp = torch.zeros((np.prod(config.image_shape), 1))
+
+# axes = []
+# for idx, s in enumerate(config.image_shape):
+#     if idx == (len(config.image_shape) - 1):
+#         axes.append(torch.linspace(0, 1, s * config.interp_factor))        
+#     else:
+#         axes.append(torch.linspace(0, 1, s))
+
 axes = []
-for idx, s in enumerate(config.image_shape):
-    if idx == (len(config.image_shape) - 1):
-        axes.append(torch.linspace(0, 1, s * config.interp_factor))        
-    else:
-        axes.append(torch.linspace(0, 1, s))
+for s in config.image_shape:
+    axes.append(torch.linspace(0, 1, s))
         
 mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 
@@ -281,8 +291,8 @@ trainer = pl.Trainer(
 )
 
 #pretraining
-# trainer.fit(model, tiny_loader)
-trainer.fit(model, train_loader)
+trainer.fit(model, tiny_loader)
+# trainer.fit(model, train_loader)
 
 #freeze decoder
 for layer in model.decoder:
@@ -348,7 +358,8 @@ config.log = str(model.logger.version)
 #create a prediction
 pred = torch.concat(trainer.predict(model, test_loader))
             
-im = pred.reshape(config.image_shape)
+# im = pred.reshape(config.image_shape)
+im = pred.reshape(data.shape)
 im = im.detach().cpu().numpy()
 im = np.array(im, dtype=np.float32)
 if len(im.shape) == 2:
@@ -361,8 +372,12 @@ else:
 #create an interpolation
 interp = torch.concat(trainer.predict(model, interp_loader))
        
+# if len(data.shape) == 3:     
+#     interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[3] * config.interp_factor))
+
 if len(data.shape) == 3:     
-    interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[3] * config.interp_factor))
+    interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[3]))
+    
 if len(data.shape) == 4:
     interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3] * config.interp_factor))
 interp_im = interp_im.detach().cpu().numpy()
