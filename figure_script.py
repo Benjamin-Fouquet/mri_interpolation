@@ -4,27 +4,47 @@ import os
 import matplotlib.pyplot as plt
 import imageio
 
-log_number = 12
+log_number = 71
 log_path = f'/home/benjamin/results_repaper/version_{log_number}/' 
 
-im = nib.load(log_path + 'interpolation.nii.gz').get_fdata()
+file = 'interpolation'
+im = nib.load(log_path + f'{file}.nii.gz').get_fdata()
+
+dimension = '2D'
 
 if len(im.shape) == 4:
     im = im[:,:,3,:]
+    dimension = '3D'
 
 
-fig, axes = plt.subplots(6, 5)
+fig, axes = plt.subplots(3, 5)
 
 for j in range(5):
-    for i in range(6):
-        data = im[..., (j * 6 + i)]
+    for i in range(3):
+        print(str(j * 3 + i))
+        data = im[..., (j * 3 + i)]
         axes[i][j].imshow(data.T, origin="lower", cmap="gray")
 
-#TODO: parse config and get encotype
-title = 'Interpolation Hash3D + t'
+
+with open(f'/home/benjamin/results_repaper/version_{log_number}/config.txt', 'r') as f:
+    lines = f.readlines()
+
+config = {}    
+for line in lines:
+    #remove \n
+    line = line[:-1]
+    #split before and after :
+    key, value = line.split(':')
+    key = key[:-1] #remove space
+    value = value[1:]
+    config[key] = value
+
+enco = config['encoder_type']
+
+title = f'{file}_{enco}_{dimension}' #all attached as used for file names
 
 fig.suptitle(title, fontsize=16)        
-plt.savefig(log_path + 'interpolation.png')
+plt.savefig(log_path + f'{title}.png')
 plt.clf()
 
 
@@ -39,7 +59,7 @@ for idx in range(im.shape[-1]):
     filenames.append(filename)
     
 # build gif
-with imageio.get_writer(log_path + 'interpolation.gif', mode='I') as writer:
+with imageio.get_writer(log_path + f'{title}.gif', mode='I') as writer:
     for filename in filenames:
         image = imageio.imread(filename)
         writer.append_data(image)
