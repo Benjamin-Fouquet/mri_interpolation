@@ -1,5 +1,5 @@
 '''
-Temp script for interpolation tests, shoudl be deleted
+Temp script for interpolation tests
 
 scipy interp too long for correct results
 '''
@@ -97,7 +97,7 @@ lin_interpolator = itk.LinearInterpolateImageFunction.New(itk_np)
 # lin_interpolator.EvaluateAtContinuousIndex(index)
 
 #interpolate
-interpolated = np.zeros((352, 352, 15))
+interpolated = np.zeros(config.image_shape)
 it = np.nditer(interpolated, flags=['multi_index'], op_flags=['readwrite'])
 for i in it:
     interpolated[it.multi_index] = lin_interpolator.EvaluateAtContinuousIndex((it.multi_index[2] / 2, it.multi_index[1], it.multi_index[0]))

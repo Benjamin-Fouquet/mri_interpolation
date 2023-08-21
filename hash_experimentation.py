@@ -28,12 +28,12 @@ torch.manual_seed(1337)
 
 @dataclass
 class BaseConfig:
-    checkpoint_path = None #'lightning_logs/version_384/checkpoints/epoch=99-step=100.ckpt'
+    checkpoint_path = None #'lightning_logs/version_61/checkpoints/epoch=199-step=12000.ckpt'
     # image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
     image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
-    batch_size: int = 10000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 50
+    batch_size: int = 100000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 100
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
@@ -41,9 +41,9 @@ class BaseConfig:
     # Network parameters
     n_levels: int = 8
     n_features_per_level: int = 2
-    log2_hashmap_size: int = 19
-    base_resolution: MappingProxyType = (64, 64, 8)
-    finest_resolution: MappingProxyType = (512, 512, 8)
+    log2_hashmap_size: int = 23
+    base_resolution: MappingProxyType = (64, 64, 64, 4)
+    finest_resolution: MappingProxyType = (512, 512, 512, 8)
     # base_resolution: int = 64
     # finest_resolution: int = 512
     per_level_scale: int = 1.5
@@ -204,7 +204,7 @@ class HashMLP(pl.LightningModule):
 mri_image = nib.load(config.image_path)
 
 data = mri_image.get_fdata(dtype=np.float32)
-data = data[:,:,3,:]
+# data = data[:,:,3,:] #optional line for 2D + t experiments, speedup
 config.image_shape = data.shape
 config.dim_in = len(data.shape)
 
@@ -235,7 +235,12 @@ for s in config.image_shape:
 mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 
 coords = torch.FloatTensor(mgrid)
-coords = coords[:,:,::2,:]
+
+#TODO: conditional step for interp
+if config.dim_in ==3:
+    coords = coords[:,:,::2,:]
+if config.dim_in ==4:
+    coords = coords[:,:,:,::2,:]
 X = coords.reshape(len(Y), config.dim_in)
 
 dataset = torch.utils.data.TensorDataset(X, Y)
@@ -253,7 +258,12 @@ tinyY = tinyY / Y.max()
 #     coords = torch.FloatTensor(mgrid[:,:,:,[3, 7, 13],:])
 # if len(config.image_shape) == 3:
 #     coords = torch.FloatTensor(mgrid[:,:,[3, 7, 13],:])
-coords = torch.FloatTensor(mgrid[:,:,4,:])
+
+if config.dim_in ==3:
+    coords = torch.FloatTensor(mgrid[:,:,4,:])
+if config.dim_in ==4:
+    coords = torch.FloatTensor(mgrid[:,:,:,4,:])
+
 tinyX = coords.reshape(len(tinyY), config.dim_in)
     
 tinydataset = dataset = torch.utils.data.TensorDataset(tinyX, tinyY)
@@ -375,11 +385,16 @@ interp = torch.concat(trainer.predict(model, interp_loader))
 # if len(data.shape) == 3:     
 #     interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[3] * config.interp_factor))
 
+# if len(data.shape) == 4:
+#     interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3] * config.interp_factor))
+    
 if len(data.shape) == 3:     
     interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[3]))
     
 if len(data.shape) == 4:
-    interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3] * config.interp_factor))
+    interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3]))
+    
+
 interp_im = interp_im.detach().cpu().numpy()
 interp_im = np.array(interp_im, dtype=np.float32)
 nib.save(nib.Nifti1Image(interp_im, affine=np.eye(4)), filepath + 'interpolation.nii.gz')

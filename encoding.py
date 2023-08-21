@@ -76,7 +76,6 @@ def fast_hash(ind: torch.Tensor, primes: torch.Tensor, hashmap_size: int):
         ind[..., 0] ^= ind[..., i]
     return ind[..., 0] % hashmap_size
 
-
 class _HashGrid(nn.Module):
     def __init__(self, dim: int, n_features: int, hashmap_size: int, resolution: float):
         super().__init__()
@@ -192,6 +191,11 @@ class MultiResHashGrid(nn.Module):
 
 class _HashGridV2(pl.LightningModule):
     def __init__(self, dim: int, n_features: int, hashmap_size: int, resolution: float):
+        '''
+        -Create embedding of size (hash_size, n_features)
+        -define number of neighbours and their indices
+        -check if neighbour is one away from a particular point(?)
+        '''
         super().__init__()
         self.dim = dim
         self.n_features = n_features
@@ -211,15 +215,26 @@ class _HashGridV2(pl.LightningModule):
         self.register_buffer("primes", primes, persistent=False)
 
         # create interpolation binary mask
-        n_neigs = 1 << self.dim
-        neigs = np.arange(n_neigs, dtype=np.int64).reshape((-1, 1))
-        dims = np.arange(self.dim, dtype=np.int64).reshape((1, -1))
-        bin_mask = torch.tensor(neigs & (1 << dims) == 0, dtype=bool)  # (neig, dim)
+        n_neigs = 1 << self.dim # equivalent to 2 ** self.dim, set number of neighbors
+        neigs = np.arange(n_neigs, dtype=np.int64).reshape((-1, 1)) #list of indices from 0 to n_neigs
+        dims = np.arange(self.dim, dtype=np.int64).reshape((1, -1)) #list of dim indices
+        bin_mask = torch.tensor(neigs & (1 << dims) == 0, dtype=bool)  # (neig, dim)  neigs & (1 << dims) == 0 means if neigs and dims are different then True
         self.register_buffer("bin_mask", bin_mask, persistent=False)
 
     def forward(self, x: torch.Tensor):
-        bdims = len(x.shape[:-1]) #used to match the shpe of the mask afterwards
-        x = x * self.resolution.to(self.device) #multiply the 0-1 range by the resolution (giving indices ?)
+        '''
+        scale x to current target resolution.
+        isolate x_int, becomes indices
+        isolate x_float, will become weighting of each neighbour indice
+        create a binary mask, used ot select the closest indice (either i or i + 1). Embedding of the indice will be used as interp (bruteforce with all possibilities ?)
+        inds is list of indices to be fetched
+        ws will be weight of particular indice, linear weighting depending on distance (float part of the indice)
+        w is product of ws
+        fetch the relevant features via hashmap
+        return the sum of the features * w for all possiblities (?)
+        '''
+        bdims = len(x.shape[:-1]) #used to match the shape of the mask afterwards
+        x = x * self.resolution.to(self.device) #multiply the 0-1 range by the resolution (giving indices ?), scale indices to resolution. int part become closest edge ?
         x_int = x.long() #convertion to int, isolate indices ?
         x_float = x - x_int.float().detach() #decimal part of x
         x_int = x_int.unsqueeze(dim=-2)  # (batch..., 1, dim)
@@ -233,12 +248,12 @@ class _HashGridV2(pl.LightningModule):
         #     bin_mask = bin_mask.to('cuda')
         inds = torch.where(bin_mask, x_int, x_int + 1)  # (b..., neig, dim) #if mask then x_int else x_int + 1. Create list of indices
         ws = torch.where(bin_mask, 1 - x_float, x_float)  # (b...., neig, dim)
-        # aggregate nehgibors' interp weights
+        # aggregate neighbours, interp weights
         w = ws.prod(dim=-1, keepdim=True)  # (b..., neig, 1)
         # hash neighbors' id and look up table
         hash_ids = fast_hash(inds, self.primes, self.hashmap_size)  # (b..., neig)
-        neig_data = self.embedding(hash_ids)  # (b..., neig, feat)
-        return torch.sum(neig_data * w, dim=-2)  # (b..., feat)
+        neig_data = self.embedding(hash_ids)  # (b..., neighbours, features)
+        return torch.sum(neig_data * w, dim=-2)  # (b..., feat) #weighting of interpolation between neighbours at this point
 
 
 class MultiResHashGridV2(pl.LightningModule):
@@ -306,7 +321,7 @@ class MultiResHashGridV2(pl.LightningModule):
 
 
 encoder1 = MultiResHashGrid(
-    dim=4,
+    dim=2,
     n_levels=4,
     n_features_per_level=2,
     log2_hashmap_size=19,
@@ -315,15 +330,15 @@ encoder1 = MultiResHashGrid(
 )
 
 encoder2 = MultiResHashGridV2(
-    dim=4,
-    n_levels=4,
-    n_features_per_level=2,
+    dim=5,
+    n_levels=1,
+    n_features_per_level=1,
     log2_hashmap_size=19,
-    base_resolution=(16, 16, 16, 4),
-    finest_resolution=(512, 512, 512, 30),
+    base_resolution=(16, 16, 16, 4, 4),
+    finest_resolution=(512, 512, 512, 512, 512),
 )
 
-encoder1(torch.randn(10, 4))
-encoder2(torch.ones(10, 4))
+encoder1(torch.randn(10, 2))
+encoder2(torch.ones(1, 5))
 
 mgrid = create_mgrid(shape=(3, 3, 3))

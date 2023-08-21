@@ -1,7 +1,7 @@
 '''
 Implementation 'Continuous Longitudinal Fetus Brain Atlas Construction via Implicit Neural Representation' using tinycuda
 
-current state: Test if the differnetial encoding and reordering of T is beneficial for resutlts. Maybe try first 1 encoder but with reordered T, then dual encoder
+current state: Test if the differential encoding and reordering of T is beneficial for resutlts. Maybe try first 1 encoder but with reordered T, then dual encoder
 '''
 from typing import List, Optional, Union
 from pytorch_lightning.utilities.types import LRSchedulerTypeUnion
@@ -28,13 +28,13 @@ torch.manual_seed(1337)
 
 @dataclass
 class BaseConfig:
-    checkpoint_path = None #'lightning_logs/version_25/checkpoints/epoch=49-step=11200.ckpt'
+    checkpoint_path = 'lightning_logs/version_66/checkpoints/epoch=49-step=5000.ckpt'
     log: str = None
     # image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
     image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
-    batch_size: int = 250000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 50
+    batch_size: int = 100000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 200
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
@@ -382,9 +382,12 @@ class FreqMLP(pl.LightningModule):
 mri_image = nib.load(config.image_path)
 
 data = mri_image.get_fdata(dtype=np.float32)
-data = data[:,:,:,:] #optional line for doing 3D and accelerate prototyping
+data = data[:,:,3,:] #optional line for doing 3D and accelerate prototyping
 config.image_shape = data.shape
 config.dim_in = len(data.shape)
+
+#interpolation tests
+data = data[..., ::2]
 
 if config.checkpoint_path is not None:
     model = FreqMLP.load_from_checkpoint(
@@ -429,6 +432,13 @@ for s in config.image_shape:
 mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 
 coords = torch.FloatTensor(mgrid)
+
+#TODO: conditional step for interp
+if config.dim_in ==3:
+    coords = coords[:,:,::2,:]
+if config.dim_in ==4:
+    coords = coords[:,:,:,::2,:]
+
 X = coords.reshape(len(Y), config.dim_in)
 
 dataset = torch.utils.data.TensorDataset(X, Y)
@@ -437,14 +447,21 @@ train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size
 
 test_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
 
-# #dense grid
-Y_interp = torch.zeros((np.prod(config.image_shape) * config.interp_factor, 1))
+# dense grid
+# Y_interp = torch.zeros((np.prod(config.image_shape) * config.interp_factor, 1))
+
+Y_interp = torch.zeros((np.prod(config.image_shape), 1))
+
+# axes = []
+# for idx, s in enumerate(config.image_shape):
+#     if idx == (len(config.image_shape) - 1):
+#         axes.append(torch.linspace(0, 1, s * config.interp_factor))        
+#     else:
+#         axes.append(torch.linspace(0, 1, s))
+
 axes = []
-for idx, s in enumerate(config.image_shape):
-    if idx == (len(config.image_shape) - 1):
-        axes.append(torch.linspace(0, 1, s * config.interp_factor))        
-    else:
-        axes.append(torch.linspace(0, 1, s))
+for s in config.image_shape:
+    axes.append(torch.linspace(0, 1, s))
         
 mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 
@@ -470,7 +487,7 @@ config.log = str(model.logger.version)
 #create a prediction
 pred = torch.concat(trainer.predict(model, test_loader))
             
-im = pred.reshape(config.image_shape)
+im = pred.reshape(data.shape)
 im = im.detach().cpu().numpy()
 im = np.array(im, dtype=np.float32)
 if len(im.shape) == 2:
@@ -483,9 +500,11 @@ else:
 interp = torch.concat(trainer.predict(model, interp_loader))
        
 if len(data.shape) == 3:     
-    interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[3] * config.interp_factor))
+    # interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[3] * config.interp_factor))
+    interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[3]))
 if len(data.shape) == 4:
-    interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3] * config.interp_factor))
+    # interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3] * config.interp_factor))
+    interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[3]))
 interp_im = interp_im.detach().cpu().numpy()
 interp_im = np.array(interp_im, dtype=np.float32)
 nib.save(nib.Nifti1Image(interp_im, affine=np.eye(4)), filepath + 'interpolation.nii.gz')
