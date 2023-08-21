@@ -1,3 +1,6 @@
+'''
+Script for generating figures from locally saved logs
+'''
 import nibabel as nib 
 from dataclasses import dataclass
 import os
