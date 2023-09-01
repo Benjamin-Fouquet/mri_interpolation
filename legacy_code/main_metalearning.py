@@ -30,7 +30,7 @@ from torch.nn import functional as F
 import config as cg
 import datamodules
 import models
-import optimizers
+import legacy_code.optimizers as optimizers
 import torchvision
 from einops import rearrange
 from torchsummary import summary

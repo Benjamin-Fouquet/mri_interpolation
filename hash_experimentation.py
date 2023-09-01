@@ -29,11 +29,12 @@ torch.manual_seed(1337)
 @dataclass
 class BaseConfig:
     checkpoint_path = None #'lightning_logs/version_61/checkpoints/epoch=199-step=12000.ckpt'
-    # image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
-    image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+    image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
+    # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
-    batch_size: int = 100000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 100
+    interp_shape = (352, 352, 6, 30)
+    batch_size: int = 500000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 500
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
@@ -41,19 +42,18 @@ class BaseConfig:
     # Network parameters
     n_levels: int = 8
     n_features_per_level: int = 2
-    log2_hashmap_size: int = 23
-    base_resolution: MappingProxyType = (64, 64, 64, 4)
-    finest_resolution: MappingProxyType = (512, 512, 512, 8)
+    log2_hashmap_size: int = 22
+    base_resolution: MappingProxyType = (32, 32, 32, 8)
+    finest_resolution: MappingProxyType = (128, 128, 128, 15)
     # base_resolution: int = 64
     # finest_resolution: int = 512
     per_level_scale: int = 1.5
     interpolation: str = "Linear" #can be "Nearest", "Linear" or "Smoothstep", not used if not 'tcnn' encoder_type
     dim_in: int = len(image_shape)
-    dim_hidden: int = 128 
+    dim_hidden: int = 182 
     dim_out: int = 1
-    num_layers: int = 4
+    num_layers: int = 6
     lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1 
-    interp_factor: int = 2
 
     def export_to_txt(self, file_path: str = "") -> None:
         with open(file_path + "config.txt", "w") as f:
@@ -175,9 +175,6 @@ class HashMLP(pl.LightningModule):
         return self.optimizer
 
     def training_step(self, batch, batch_idx):
-        '''
-        TODO: separate reg in second half of training only ?
-        '''
         x, y = batch
 
         y_pred = self.forward(x)
@@ -209,7 +206,7 @@ config.image_shape = data.shape
 config.dim_in = len(data.shape)
 
 #interpolation tests
-data = data[..., ::2]
+# data = data[..., ::2]
 
 model = HashMLP(dim_in=config.dim_in, 
                 dim_hidden=config.dim_hidden, 
@@ -236,11 +233,11 @@ mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 
 coords = torch.FloatTensor(mgrid)
 
-#TODO: conditional step for interp
-if config.dim_in ==3:
-    coords = coords[:,:,::2,:]
-if config.dim_in ==4:
-    coords = coords[:,:,:,::2,:]
+if data.shape[-1] < 15: #conditional step if interp on even frames
+    if config.dim_in ==3:
+        coords = coords[:,:,::2,:]
+    if config.dim_in ==4:
+        coords = coords[:,:,:,::2,:]
 X = coords.reshape(len(Y), config.dim_in)
 
 dataset = torch.utils.data.TensorDataset(X, Y)
@@ -250,47 +247,24 @@ train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size
 test_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
 
 #Tinyset, 1 timepoint. TODO: try with 2 later
-# tinyY= Y = torch.FloatTensor(data[..., [3, 7, 13]]).reshape(-1, 1)
-tinyY= Y = torch.FloatTensor(data[..., 4]).reshape(-1, 1)
+tinyY= Y = torch.FloatTensor(data[..., [3, 7, 13]]).reshape(-1, 1) #TODO: Activate this for brain
+# tinyY= Y = torch.FloatTensor(data[..., 4]).reshape(-1, 1)
 tinyY = tinyY / Y.max()   
 
-# if len(config.image_shape) == 4:
-#     coords = torch.FloatTensor(mgrid[:,:,:,[3, 7, 13],:])
-# if len(config.image_shape) == 3:
-#     coords = torch.FloatTensor(mgrid[:,:,[3, 7, 13],:])
+if len(config.image_shape) == 4:
+    coords = torch.FloatTensor(mgrid[:,:,:,[3, 7, 13],:])
+if len(config.image_shape) == 3:
+    coords = torch.FloatTensor(mgrid[:,:,[3, 7, 13],:])
 
-if config.dim_in ==3:
-    coords = torch.FloatTensor(mgrid[:,:,4,:])
-if config.dim_in ==4:
-    coords = torch.FloatTensor(mgrid[:,:,:,4,:])
+# if config.dim_in ==3:
+#     coords = torch.FloatTensor(mgrid[:,:,4,:])
+# if config.dim_in ==4:
+#     coords = torch.FloatTensor(mgrid[:,:,:,4,:])
 
 tinyX = coords.reshape(len(tinyY), config.dim_in)
     
 tinydataset = dataset = torch.utils.data.TensorDataset(tinyX, tinyY)
 tiny_loader = torch.utils.data.DataLoader(tinydataset, batch_size=config.batch_size, shuffle=True, num_workers=config.num_workers)
-
-#dense grid
-# Y_interp = torch.zeros((np.prod(config.image_shape) * config.interp_factor, 1))
-Y_interp = torch.zeros((np.prod(config.image_shape), 1))
-
-# axes = []
-# for idx, s in enumerate(config.image_shape):
-#     if idx == (len(config.image_shape) - 1):
-#         axes.append(torch.linspace(0, 1, s * config.interp_factor))        
-#     else:
-#         axes.append(torch.linspace(0, 1, s))
-
-axes = []
-for s in config.image_shape:
-    axes.append(torch.linspace(0, 1, s))
-        
-mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
-
-coords = torch.FloatTensor(mgrid)
-X_interp = coords.reshape(len(Y_interp), config.dim_in)    
-
-interp_dataset = torch.utils.data.TensorDataset(X_interp, Y_interp)
-interp_loader = torch.utils.data.DataLoader(interp_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
    
 trainer = pl.Trainer(
     gpus=config.device,
@@ -317,51 +291,6 @@ trainer = pl.Trainer(
 )
 trainer.fit(model, train_loader)
 
-
-# array = model.encoder.params.detach().cpu().numpy()
-
-# array = array.reshape(config.base_resolution, config.base_resolution, config.base_resolution) #only works for some exemples
-
-# #In test, does not work yet
-# for idx, slc in enumerate(array):
-#     if slc.sum() < 1e-2 and idx > 0:
-#         array[idx] = array[(idx - 1)]
-        
-# array2 = model.encoder.params.detach().cpu().numpy()
-
-'''
-Source of smoothing: https://danielmuellerkomorowska.com/2020/06/02/smoothing-data-by-rolling-average-with-numpy/
-Kernel smoothing 1D does not work, try 3D (mutliply anchor slices first if needed)
-'''
-# kernel_size = 50
-# kernel = np.ones(kernel_size) / kernel_size
-# array_convolved = np.convolve(array, kernel, mode='same')
-
-##griddata on array, too time consuming
-# axes = []
-# # for s in array.shape:
-# for s in (32, 32, 32):
-#     axes.append(np.linspace(0, 1, s))
-    
-# mgrid = np.stack(np.meshgrid(*axes, indexing='ij'), axis=-1)
-
-# grid = griddata(mgrid[::4].reshape(-1, 3), array[::4].reshape(-1, 1), xi=(mgrid))
-
-# #set parameters
-# p_dict = model.encoder.state_dict()
-# p_dict['parametrizations.params.original'] = torch.FloatTensor(array_convolved)
-    
-# model.encoder.load_state_dict(p_dict)
-
-# trainer = pl.Trainer(
-#     gpus=config.device,
-#     max_epochs=config.epochs,
-#     accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
-#     precision=32,
-#     # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
-# )
-# trainer.fit(model, train_loader)
-
 filepath = model.logger.log_dir + '/'
 config.log = str(model.logger.version)
 
@@ -376,28 +305,36 @@ if len(im.shape) == 2:
     plt.imshow(im.T)
     plt.savefig(filepath + 'pred.png')
 else:
-
     nib.save(nib.Nifti1Image(im, affine=np.eye(4)), filepath + 'pred.nii.gz')
 
-#create an interpolation
-interp = torch.concat(trainer.predict(model, interp_loader))
-       
-# if len(data.shape) == 3:     
-#     interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[3] * config.interp_factor))
+interp_shapes = [(117, 159, 126, 30), (117, 159, 126, 60), (256, 256, 256, 30), (256, 256, 256, 60)]
+# interp_shapes = [(117, 159, 126, 30)]
+#ugly loop as placeholder
+for shape in interp_shapes:    
+    #dense grid
+    config.interp_shape = shape
+    Y_interp = torch.zeros((np.prod(config.interp_shape), 1))
 
-# if len(data.shape) == 4:
-#     interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3] * config.interp_factor))
-    
-if len(data.shape) == 3:     
-    interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[3]))
-    
-if len(data.shape) == 4:
-    interp_im = interp.reshape((mri_image.shape[0], mri_image.shape[1], mri_image.shape[2], mri_image.shape[3]))
-    
+    axes = []
+    for s in config.interp_shape:
+        axes.append(torch.linspace(0, 1, s))
+            
+    mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 
-interp_im = interp_im.detach().cpu().numpy()
-interp_im = np.array(interp_im, dtype=np.float32)
-nib.save(nib.Nifti1Image(interp_im, affine=np.eye(4)), filepath + 'interpolation.nii.gz')
+    coords = torch.FloatTensor(mgrid)
+    X_interp = coords.reshape(len(Y_interp), config.dim_in)    
+
+    interp_dataset = torch.utils.data.TensorDataset(X_interp, Y_interp)
+    interp_loader = torch.utils.data.DataLoader(interp_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
+
+    #create an interpolation
+    interp = torch.concat(trainer.predict(model, interp_loader))
+
+    interp_im = interp.reshape(config.interp_shape)
+        
+    interp_im = interp_im.detach().cpu().numpy()
+    interp_im = np.array(interp_im, dtype=np.float32)
+    nib.save(nib.Nifti1Image(interp_im, affine=np.eye(4)), filepath + f'interpolation{shape}.nii.gz')
 
 config.export_to_txt(file_path=filepath)
 
@@ -461,4 +398,48 @@ with open(filepath + "scores.txt", "w") as f:
 #             #sum it up
 #             #interpolate with neighbouring slices that have a value
 #             #replace
+
+# array = model.encoder.params.detach().cpu().numpy()
+
+# array = array.reshape(config.base_resolution, config.base_resolution, config.base_resolution) #only works for some exemples
+
+# #In test, does not work yet
+# for idx, slc in enumerate(array):
+#     if slc.sum() < 1e-2 and idx > 0:
+#         array[idx] = array[(idx - 1)]
+        
+# array2 = model.encoder.params.detach().cpu().numpy()
+
+'''
+Source of smoothing: https://danielmuellerkomorowska.com/2020/06/02/smoothing-data-by-rolling-average-with-numpy/
+Kernel smoothing 1D does not work, try 3D (mutliply anchor slices first if needed)
+'''
+# kernel_size = 50
+# kernel = np.ones(kernel_size) / kernel_size
+# array_convolved = np.convolve(array, kernel, mode='same')
+
+##griddata on array, too time consuming
+# axes = []
+# # for s in array.shape:
+# for s in (32, 32, 32):
+#     axes.append(np.linspace(0, 1, s))
+    
+# mgrid = np.stack(np.meshgrid(*axes, indexing='ij'), axis=-1)
+
+# grid = griddata(mgrid[::4].reshape(-1, 3), array[::4].reshape(-1, 1), xi=(mgrid))
+
+# #set parameters
+# p_dict = model.encoder.state_dict()
+# p_dict['parametrizations.params.original'] = torch.FloatTensor(array_convolved)
+    
+# model.encoder.load_state_dict(p_dict)
+
+# trainer = pl.Trainer(
+#     gpus=config.device,
+#     max_epochs=config.epochs,
+#     accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
+#     precision=32,
+#     # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
+# )
+# trainer.fit(model, train_loader)
     

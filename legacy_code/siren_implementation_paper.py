@@ -1,5 +1,5 @@
 '''
-Implementation 'Continuous Longitudinal Fetus Brain Atlas Construction via Implicit Neural Representation' using tinycuda
+Implementation 'Continuous Longitudinal Fetus Brain Atlas Construction via Implicit Neural Representation' , test version with gabor wavelets
 
 current state: Test if the differnetial encoding and reordering of T is beneficial for resutlts. Maybe try first 1 encoder but with reordered T, then dual encoder
 '''

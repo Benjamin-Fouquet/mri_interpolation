@@ -29,10 +29,11 @@ torch.manual_seed(1337)
 @dataclass
 class BaseConfig:
     checkpoint_path = None #'lightning_logs/version_384/checkpoints/epoch=99-step=100.ckpt'
-    # image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
-    image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+    n_trials = 1
+    image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
+    # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
-    batch_size: int = 250000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    batch_size: int = 100000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
     epochs: int = 50
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
@@ -224,18 +225,20 @@ train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size
 
 test_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
 
+filepath = 'optuna_studies/'
+
 optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
-study_name = "hash_study"  # Unique identifier of the study.
-storage_name = f"sqlite:///{study_name}.db"
+study_name = "hash_study_brain"  # Unique identifier of the study.
+storage_name = f"sqlite:///{filepath}{study_name}.db"
 
 def objective(trial):
     #parameters to search
-    config.num_layers = trial.suggest_int("num_layers", 3, 10)
+    config.num_layers = trial.suggest_int("num_layers", 2, 10)
     config.dim_hidden = trial.suggest_int('dim_hidden', 64, 256)
-    br_slice = trial.suggest_int('starting_slice_resolution', 2, 6)
-    br_time = trial.suggest_int('starting_time_resolution', 4, 15)
-    fr_slice = trial.suggest_int('final_slice_resolution', 6, 6)
-    fr_time = trial.suggest_int('final_time_resolution', 15, 15)
+    br_slice = trial.suggest_int('starting_slice_resolution', 64, 512)
+    br_time = trial.suggest_int('starting_time_resolution', 4, 30)
+    fr_slice = trial.suggest_int('final_slice_resolution', 128, 512)
+    fr_time = trial.suggest_int('final_time_resolution', 8, 30)
     config.base_resolution = (64, 64, br_slice, br_time)
     config.finest_resolution = (512, 512, fr_slice, fr_time)
     config.n_levels = trial.suggest_int('n_levels', 8, 32)
@@ -283,14 +286,12 @@ def objective(trial):
     return model.final_loss
 
 study = optuna.create_study(direction='minimize', study_name=study_name, storage=storage_name, load_if_exists=True)
-study.optimize(objective, n_trials=10)
+study.optimize(objective, n_trials=config.n_trials)
 
-filepath = 'optuna_studies/'
-
-with open(filepath + 'best_params_hashMLP.txt', 'w') as f:
+with open(filepath + f'best_params_{study_name}.txt', 'w') as f:
     print(study.best_params, file=f)
 
-study.trials_dataframe().to_csv(filepath + 'hashMLP_tests.csv')
+study.trials_dataframe().to_csv(filepath + f'{study_name}.csv')
 
 
 
