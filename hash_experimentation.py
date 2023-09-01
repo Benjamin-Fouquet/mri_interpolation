@@ -7,7 +7,7 @@ current state: Test if the differnetial encoding and reordering of T is benefici
 '''
 from typing import List, Optional, Union
 from pytorch_lightning.utilities.types import LRSchedulerTypeUnion
-import tinycudann as tcnn 
+# import tinycudann as tcnn 
 import torch
 import pytorch_lightning as pl 
 import torch.nn.functional as F
