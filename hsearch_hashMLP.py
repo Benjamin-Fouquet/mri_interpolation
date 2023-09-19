@@ -265,23 +265,9 @@ def objective(trial):
         max_epochs=config.epochs,
         accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
         precision=32,
-        # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
     )
 
     trainer.fit(model, train_loader)
-    
-    # #create a prediction
-    # pred = torch.concat(trainer.predict(model, test_loader))
-                
-    # im = pred.reshape(config.image_shape)
-    # im = im.detach().cpu().numpy()
-    # im = np.array(im, dtype=np.float32)
-    
-    #do DFT on prediction
-    # fourier = fftshift(fftn(im))    
-    #quantify high freq components ?
-    
-    #return
     
     return model.final_loss
 

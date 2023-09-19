@@ -1,8 +1,5 @@
 """
 Launcher for trainings using datamodules and models
-
-TODO:
--normalisation is repeated and clunky, solve.
 """
 
 import json

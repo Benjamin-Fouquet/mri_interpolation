@@ -2,7 +2,7 @@
 Temp script for interpolation tests
 
 scipy interp too long for correct results
-'''
+'''''
 from scipy.interpolate import griddata, interpn, LinearNDInterpolator
 from typing import List, Optional, Union
 from pytorch_lightning.utilities.types import LRSchedulerTypeUnion
@@ -80,7 +80,8 @@ mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 # values = data[..., ::2].reshape(-1, 1)
 # xi = mgrid[:,:,1::2,:].reshape(-1, 3)
 
-values = data[..., ::2]
+# values = data[..., ::2]
+values = data
 itk_np = itk.GetImageFromArray(np.ascontiguousarray(values))
 
 
@@ -97,9 +98,11 @@ lin_interpolator = itk.LinearInterpolateImageFunction.New(itk_np)
 # lin_interpolator.EvaluateAtContinuousIndex(index)
 
 #interpolate
-interpolated = np.zeros(config.image_shape)
+interpolated = np.zeros(config.image_shape[2], config.image_shape[1], config.image_shape[0] * 4)
 it = np.nditer(interpolated, flags=['multi_index'], op_flags=['readwrite'])
 for i in it:
-    interpolated[it.multi_index] = lin_interpolator.EvaluateAtContinuousIndex((it.multi_index[2] / 2, it.multi_index[1], it.multi_index[0]))
+    # interpolated[it.multi_index] = lin_interpolator.EvaluateAtContinuousIndex((it.multi_index[2] / 2, it.multi_index[1], it.multi_index[0]))
+    interpolated[it.multi_index] = lin_interpolator.EvaluateAtContinuousIndex((it.multi_index[2], it.multi_index[1], it.multi_index[0]))
 
-nib.save(nib.Nifti1Image(interpolated, affine=np.eye(4)), 'lightning_logs/version_55/itk_interpolated.nii.gz')
+
+nib.save(nib.Nifti1Image(interpolated, affine=np.eye(4)), 'itk_interpolated_60.nii.gz')

@@ -23,36 +23,37 @@ import torch.utils.data
 import matplotlib.pyplot as plt
 import encoding
 from skimage import metrics
+import tinycudann as tcnn
 
 torch.manual_seed(1337)
 
 @dataclass
 class BaseConfig:
     checkpoint_path = None #'lightning_logs/version_61/checkpoints/epoch=199-step=12000.ckpt'
-    image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
-    # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+    # image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
+    image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
-    interp_shape = (352, 352, 6, 30)
-    batch_size: int = 500000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 500
+    interp_shape = (352, 352, 30)
+    batch_size: int = 50000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 3000
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
-    encoder_type: str = 'hash' #   
+    encoder_type: str = 'tcnn' #   
     # Network parameters
     n_levels: int = 8
     n_features_per_level: int = 2
     log2_hashmap_size: int = 22
-    base_resolution: MappingProxyType = (32, 32, 32, 8)
-    finest_resolution: MappingProxyType = (128, 128, 128, 15)
-    # base_resolution: int = 64
-    # finest_resolution: int = 512
-    per_level_scale: int = 1.5
+    # base_resolution: MappingProxyType = (32, 32, 8)
+    # finest_resolution: MappingProxyType = (512, 512, 15)
+    base_resolution: int = 64
+    finest_resolution: int = 512
+    per_level_scale: int = 1.2
     interpolation: str = "Linear" #can be "Nearest", "Linear" or "Smoothstep", not used if not 'tcnn' encoder_type
     dim_in: int = len(image_shape)
-    dim_hidden: int = 182 
+    dim_hidden: int = 512 
     dim_out: int = 1
-    num_layers: int = 6
+    num_layers: int = 8
     lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1 
 
     def export_to_txt(self, file_path: str = "") -> None:
@@ -68,6 +69,10 @@ if __name__ == "__main__":
     parser.add_argument("--encoder_type", help="tcnn or classic", type=str, required=False)
     parser.add_argument("--n_frequencies", help="number of encoding frequencies", type=int, required=False)
     parser.add_argument("--n_frequencies_t", help="number of encoding frequencies for time", type=int, required=False)
+    parser.add_argument("--lr", help="learning rate", type=int, required=False)
+    parser.add_argument("--dim_hidden", help="hidden dimension for decoder", type=int, required=False)
+    parser.add_argument("--num_layers", help="number of layers for decoder", type=int, required=False)
+
     args = parser.parse_args()
 
 def export_to_txt(dict: dict, file_path: str = "") -> None:
@@ -201,7 +206,7 @@ class HashMLP(pl.LightningModule):
 mri_image = nib.load(config.image_path)
 
 data = mri_image.get_fdata(dtype=np.float32)
-# data = data[:,:,3,:] #optional line for 2D + t experiments, speedup
+data = data[:,:,3,:] #optional line for 2D + t experiments, speedup
 config.image_shape = data.shape
 config.dim_in = len(data.shape)
 
@@ -307,7 +312,7 @@ if len(im.shape) == 2:
 else:
     nib.save(nib.Nifti1Image(im, affine=np.eye(4)), filepath + 'pred.nii.gz')
 
-interp_shapes = [(117, 159, 126, 30), (117, 159, 126, 60), (256, 256, 256, 30), (256, 256, 256, 60)]
+interp_shapes = [(352, 352, 15), (352, 352, 30), (352, 352, 60)]
 # interp_shapes = [(117, 159, 126, 30)]
 #ugly loop as placeholder
 for shape in interp_shapes:    
@@ -342,21 +347,21 @@ output = im
 ground_truth = nib.load(config.image_path).get_fdata()
 ground_truth = ground_truth / ground_truth.max()
 
-# metrics
-with open(filepath + "scores.txt", "w") as f:
-    f.write("MSE : " + str(metrics.mean_squared_error(ground_truth, output)) + "\n")
-    f.write("PSNR : " + str(metrics.peak_signal_noise_ratio(ground_truth, output)) + "\n")
-    # if config.dim_in < 4:
-    #     f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, output)) + "\n")
-    # f.write(
-    #     "training time  : " + str(training_stop - training_start) + " seconds" + "\n"
-    # )
-    f.write(
-        "Number of trainable parameters : "
-        + str(sum(p.numel() for p in model.parameters() if p.requires_grad))
-        + "\n"
-    )  # remove condition if you want total parameters
-    f.write("Max memory allocated : " + str(torch.cuda.max_memory_allocated()) + "\n")
+# # metrics
+# with open(filepath + "scores.txt", "w") as f:
+#     f.write("MSE : " + str(metrics.mean_squared_error(ground_truth, output)) + "\n")
+#     f.write("PSNR : " + str(metrics.peak_signal_noise_ratio(ground_truth, output)) + "\n")
+#     # if config.dim_in < 4:
+#     #     f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, output)) + "\n")
+#     # f.write(
+#     #     "training time  : " + str(training_stop - training_start) + " seconds" + "\n"
+#     # )
+#     f.write(
+#         "Number of trainable parameters : "
+#         + str(sum(p.numel() for p in model.parameters() if p.requires_grad))
+#         + "\n"
+#     )  # remove condition if you want total parameters
+#     f.write("Max memory allocated : " + str(torch.cuda.max_memory_allocated()) + "\n")
 
 # plt.imshow(im)
 # plt.savefig(filepath + 'out.png')

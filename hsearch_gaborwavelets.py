@@ -1,10 +1,6 @@
 '''
 hyperparameter search for siren using optuna, gabor style
 
-TODO:
-try small pure gabor on 2D, hten complex
-Then try in 3D, then in 4D
-Then with decoder
 '''
 from typing import List, Optional, Union
 from pytorch_lightning.utilities.types import LRSchedulerTypeUnion
@@ -81,10 +77,10 @@ def export_to_txt(dict: dict, file_path: str = "") -> None:
 
 config = BaseConfig()
 
-# # parsed argument -> config
-# for key in args.__dict__:
-#     if args.__dict__[key] is not None:
-#         config.__dict__[key] = args.__dict__[key]
+# parsed argument -> config
+for key in args.__dict__:
+    if args.__dict__[key] is not None:
+        config.__dict__[key] = args.__dict__[key]
 
 #utils for siren
 def exists(val):
@@ -420,20 +416,7 @@ def objective(trial):
     config.num_layers = trial.suggest_int("num_layers", 2, 10)
     config.dim_hidden = trial.suggest_int('dim_hidden', 32, 512)
     config.lr = trial.suggest_float('lr', 1e-5, 1e-2)
-    
-    # model = FreqMLP(dim_in=config.dim_in, 
-    #                 dim_hidden=config.dim_hidden, 
-    #                 dim_out=config.dim_out, 
-    #                 n_layers=config.num_layers, 
-    #                 skip_connections=config.skip_connections,
-    #                 n_frequencies=config.n_frequencies,
-    #                 sigma=config.sigma,
-    #                 w0=config.w0,
-    #                 n_frequencies_t=config.n_frequencies_t,
-    #                 sigma_t=config.sigma_t,
-    #                 w0_t=config.w0_t,                
-    #                 encoder_type=config.encoder_type,
-    #                 lr=config.lr) 
+
     model = GaborNet(
                     layer_cls=config.layer_cls,
                     dim_in=config.dim_in, 
@@ -450,7 +433,6 @@ def objective(trial):
         max_epochs=config.epochs,
         accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
         precision=32,
-        # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
     )
 
     trainer.fit(model, train_loader)
