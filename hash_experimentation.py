@@ -39,15 +39,15 @@ class BaseConfig:
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
-    encoder_type: str = 'tcnn' #   
+    encoder_type: str = 'hash' #   
     # Network parameters
     n_levels: int = 8
     n_features_per_level: int = 2
     log2_hashmap_size: int = 22
-    # base_resolution: MappingProxyType = (32, 32, 8)
-    # finest_resolution: MappingProxyType = (512, 512, 15)
-    base_resolution: int = 64
-    finest_resolution: int = 512
+    base_resolution: MappingProxyType = (32, 32, 8)
+    finest_resolution: MappingProxyType = (512, 512, 15)
+    # base_resolution: int = 64
+    # finest_resolution: int = 512
     per_level_scale: int = 1.2
     interpolation: str = "Linear" #can be "Nearest", "Linear" or "Smoothstep", not used if not 'tcnn' encoder_type
     dim_in: int = len(image_shape)
@@ -69,7 +69,7 @@ if __name__ == "__main__":
     parser.add_argument("--encoder_type", help="tcnn or classic", type=str, required=False)
     parser.add_argument("--n_frequencies", help="number of encoding frequencies", type=int, required=False)
     parser.add_argument("--n_frequencies_t", help="number of encoding frequencies for time", type=int, required=False)
-    parser.add_argument("--lr", help="learning rate", type=int, required=False)
+    parser.add_argument("--lr", help="learning rate", type=float, required=False)
     parser.add_argument("--dim_hidden", help="hidden dimension for decoder", type=int, required=False)
     parser.add_argument("--num_layers", help="number of layers for decoder", type=int, required=False)
 

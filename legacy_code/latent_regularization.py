@@ -1,10 +1,6 @@
 """
-Barebone laucnher for tests
+Barebone launcher for tests, legacy code
 
-TODO:
--workers and device in conf OR include directly into class. prob if too many workers
--correct config
--normalisation is repeated and clunky, solve.
 """
 
 import json
