@@ -34,27 +34,27 @@ class BaseConfig:
     image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
     interp_shape = (352, 352, 30)
-    batch_size: int = 50000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 3000
+    batch_size: int = 200000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    epochs: int = 1000
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
     encoder_type: str = 'hash' #   
     # Network parameters
     n_levels: int = 8
-    n_features_per_level: int = 2
-    log2_hashmap_size: int = 22
-    base_resolution: MappingProxyType = (32, 32, 8)
-    finest_resolution: MappingProxyType = (512, 512, 15)
+    n_features_per_level: int = 4
+    log2_hashmap_size: int = 23
+    base_resolution: MappingProxyType = (64, 64, 5)
+    finest_resolution: MappingProxyType = (352, 352, 15)
     # base_resolution: int = 64
     # finest_resolution: int = 512
     per_level_scale: int = 1.2
     interpolation: str = "Linear" #can be "Nearest", "Linear" or "Smoothstep", not used if not 'tcnn' encoder_type
     dim_in: int = len(image_shape)
-    dim_hidden: int = 512 
+    dim_hidden: int = 64 
     dim_out: int = 1
-    num_layers: int = 8
-    lr: float = 1e-3  # G requires training with a custom lr, usually lr * 0.1 
+    num_layers: int = 2
+    lr: float = 5e-3  # G requires training with a custom lr, usually lr * 0.1 
 
     def export_to_txt(self, file_path: str = "") -> None:
         with open(file_path + "config.txt", "w") as f:
@@ -71,6 +71,8 @@ if __name__ == "__main__":
     parser.add_argument("--n_frequencies_t", help="number of encoding frequencies for time", type=int, required=False)
     parser.add_argument("--lr", help="learning rate", type=float, required=False)
     parser.add_argument("--dim_hidden", help="hidden dimension for decoder", type=int, required=False)
+    parser.add_argument("--n_levels", help="number of levels", type=int, required=False)
+    parser.add_argument("--n_features_per_level", help="n_features_per_level", type=int, required=False)
     parser.add_argument("--num_layers", help="number of layers for decoder", type=int, required=False)
 
     args = parser.parse_args()
@@ -176,7 +178,7 @@ class HashMLP(pl.LightningModule):
         return x
 
     def configure_optimizers(self):
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-4) #weight_decay=1e-5
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-5) #weight_decay=1e-5
         return self.optimizer
 
     def training_step(self, batch, batch_idx):
@@ -252,19 +254,19 @@ train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size
 test_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
 
 #Tinyset, 1 timepoint. TODO: try with 2 later
-tinyY= Y = torch.FloatTensor(data[..., [3, 7, 13]]).reshape(-1, 1) #TODO: Activate this for brain
-# tinyY= Y = torch.FloatTensor(data[..., 4]).reshape(-1, 1)
+# tinyY= Y = torch.FloatTensor(data[..., [3, 7, 13]]).reshape(-1, 1) #TODO: Activate this for brain
+tinyY= Y = torch.FloatTensor(data[..., 4]).reshape(-1, 1)
 tinyY = tinyY / Y.max()   
 
-if len(config.image_shape) == 4:
-    coords = torch.FloatTensor(mgrid[:,:,:,[3, 7, 13],:])
-if len(config.image_shape) == 3:
-    coords = torch.FloatTensor(mgrid[:,:,[3, 7, 13],:])
+# if len(config.image_shape) == 4:
+#     coords = torch.FloatTensor(mgrid[:,:,:,[3, 7, 13],:])
+# if len(config.image_shape) == 3:
+#     coords = torch.FloatTensor(mgrid[:,:,[3, 7, 13],:])
 
-# if config.dim_in ==3:
-#     coords = torch.FloatTensor(mgrid[:,:,4,:])
-# if config.dim_in ==4:
-#     coords = torch.FloatTensor(mgrid[:,:,:,4,:])
+if config.dim_in ==3:
+    coords = torch.FloatTensor(mgrid[:,:,4,:])
+if config.dim_in ==4:
+    coords = torch.FloatTensor(mgrid[:,:,:,4,:])
 
 tinyX = coords.reshape(len(tinyY), config.dim_in)
     
@@ -312,7 +314,7 @@ if len(im.shape) == 2:
 else:
     nib.save(nib.Nifti1Image(im, affine=np.eye(4)), filepath + 'pred.nii.gz')
 
-interp_shapes = [(352, 352, 15), (352, 352, 30), (352, 352, 60)]
+interp_shapes = [(352, 352, 29), (352, 352, 59)]
 # interp_shapes = [(117, 159, 126, 30)]
 #ugly loop as placeholder
 for shape in interp_shapes:    
