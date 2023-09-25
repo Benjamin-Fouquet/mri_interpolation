@@ -34,7 +34,7 @@ class BaseConfig:
     # image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
     batch_size: int = 100000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
-    epochs: int = 50
+    epochs: int = 200
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None 
@@ -43,8 +43,8 @@ class BaseConfig:
     n_levels: int = 16
     n_features_per_level: int = 2
     log2_hashmap_size: int = 19
-    base_resolution: MappingProxyType = (64, 64, 4,  4)
-    finest_resolution: MappingProxyType = (512, 512, 12, 30)
+    base_resolution: MappingProxyType = (64, 64, 4)
+    finest_resolution: MappingProxyType = (512, 512, 30)
     # base_resolution: int = 64
     # finest_resolution: int = 512
     per_level_scale: int = 1.5
@@ -203,7 +203,7 @@ class HashMLP(pl.LightningModule):
 mri_image = nib.load(config.image_path)
 
 data = mri_image.get_fdata(dtype=np.float32)
-data = data[:,:,:,:] #optional line for doing 3D and accelerate prototyping
+data = data[:,:,3,:] #optional line for doing 3D and accelerate prototyping
 config.image_shape = data.shape
 config.dim_in = len(data.shape)
  
@@ -228,21 +228,21 @@ test_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size,
 filepath = 'optuna_studies/'
 
 optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
-study_name = "hash_study_brain"  # Unique identifier of the study.
+study_name = "hash_study_ankle_2Dt"  # Unique identifier of the study.
 storage_name = f"sqlite:///{filepath}{study_name}.db"
 
 def objective(trial):
     #parameters to search
-    config.num_layers = trial.suggest_int("num_layers", 2, 10)
-    config.dim_hidden = trial.suggest_int('dim_hidden', 64, 256)
-    br_slice = trial.suggest_int('starting_slice_resolution', 64, 512)
+    config.num_layers = trial.suggest_int("num_layers", 2, 4)
+    config.dim_hidden = trial.suggest_int('dim_hidden', 64, 128)
+    br_slice = trial.suggest_int('starting_slice_resolution', 32, 64)
     br_time = trial.suggest_int('starting_time_resolution', 4, 30)
-    fr_slice = trial.suggest_int('final_slice_resolution', 128, 512)
-    fr_time = trial.suggest_int('final_time_resolution', 8, 30)
-    config.base_resolution = (64, 64, br_slice, br_time)
-    config.finest_resolution = (512, 512, fr_slice, fr_time)
+    fr_slice = trial.suggest_int('final_slice_resolution', 352, 512)
+    fr_time = trial.suggest_int('final_time_resolution', 15, 30)
+    config.base_resolution = (br_slice, br_slice, br_time)
+    config.finest_resolution = (fr_slice, fr_slice, fr_time)
     config.n_levels = trial.suggest_int('n_levels', 8, 32)
-    config.n_features_per_level = trial.suggest_int('n_features_per_level', 1, 4)
+    config.n_features_per_level = trial.suggest_int('n_features_per_level', 1, 2)
     config.log2_hashmap_size = trial.suggest_int('log2_hashmap_size', 16, 24)
     
     model = HashMLP(dim_in=config.dim_in, 
