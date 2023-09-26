@@ -37,9 +37,9 @@ class BaseConfig:
     # Network parameters
   
     dim_in: int = len(image_shape)
-    dim_hidden: int = 256 
+    dim_hidden: int = 352 
     dim_out: int = 1
-    num_layers: int = 6
+    num_layers: int = 4
     lr: float = 1e-4  # G requires training with a custom lr, usually lr * 0.1 
 
     def export_to_txt(self, file_path: str = "") -> None:
@@ -84,8 +84,8 @@ data = data[:,:,3,:] #optional line for 2D + t experiments, speedup
 config.image_shape = data.shape
 config.dim_in = len(data.shape)
 
-#interpolation tests
-# data = data[..., ::2]
+# interpolation tests
+data = data[..., ::2]
 
 model = SirenNet(dim_in=config.dim_in, 
                 dim_hidden=config.dim_hidden, 
@@ -125,13 +125,6 @@ trainer = pl.Trainer(
     # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
 )
   
-trainer = pl.Trainer(
-    gpus=config.device,
-    max_epochs=config.epochs,
-    accumulate_grad_batches=dict(config.accumulate_grad_batches) if config.accumulate_grad_batches else None,
-    precision=32,
-    # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
-)
 trainer.fit(model, train_loader)
 
 filepath = model.logger.log_dir + '/'
@@ -150,7 +143,7 @@ if len(im.shape) == 2:
 else:
     nib.save(nib.Nifti1Image(im, affine=np.eye(4)), filepath + 'pred.nii.gz')
 
-interp_shapes = [(352, 352, 15), (352, 352, 30), (352, 352, 60)]
+interp_shapes = [(352, 352, 15)]
 # interp_shapes = [(117, 159, 126, 30)]
 #ugly loop as placeholder
 for shape in interp_shapes:    
