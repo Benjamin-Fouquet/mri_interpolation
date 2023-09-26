@@ -11,7 +11,7 @@ from scipy.ndimage import convolve, distance_transform_cdt, map_coordinates
 
 import torchio as tio
 
-def create_mgrid(shape: tuple[int]):
+def create_mgrid(shape: 'tuple[int]'):
     '''
     Create mgrid of arbitrary dimension
     '''

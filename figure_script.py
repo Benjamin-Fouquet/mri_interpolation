@@ -1,5 +1,8 @@
 '''
 Script for generating figures from locally saved logs
+
+TODO:
+Back and forth animation through slice. More complicated than expected
 '''
 import nibabel as nib 
 from dataclasses import dataclass
@@ -7,10 +10,20 @@ import os
 import matplotlib.pyplot as plt
 import imageio
 
-log_number = 71
+log_number = 21
 log_path = f'/home/benjamin/results_repaper/version_{log_number}/' 
 
-file = 'interpolation'
+
+# file = 'interpolation'
+# file = 'interpolation(352, 352, 30)'
+# file = 'pred'
+# file = 'interpolation(117, 159, 126, 60)'
+# file = 'itk_interpolated_60'
+# file = 'interpolation(352, 352, 6, 60)'
+# file = 'interpolation(352, 352, 6, 30)'
+file = 'ground_truth_normalized'
+
+
 im = nib.load(log_path + f'{file}.nii.gz').get_fdata()
 
 dimension = '2D'
@@ -46,16 +59,15 @@ enco = config['encoder_type']
 
 title = f'{file}_{enco}_{dimension}' #all attached as used for file names
 
-fig.suptitle(title, fontsize=16)        
+# fig.suptitle(title, fontsize=16)        
 plt.savefig(log_path + f'{title}.png')
 plt.clf()
-
 
 filenames = []
 
 for idx in range(im.shape[-1]):
     plt.imshow(im[..., idx].T, origin="lower", cmap="gray")
-    fig.suptitle(title, fontsize=16)   
+    # fig.suptitle(title, fontsize=16)   
     filename = f'file_{idx}.png'
     plt.savefig(filename)
     plt.close()
