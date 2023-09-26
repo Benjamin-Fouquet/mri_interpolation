@@ -34,7 +34,7 @@ class BaseConfig:
     image_path: str = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
     image_shape = nib.load(image_path).shape
     interp_shape = (352, 352, 30)
-    batch_size: int = 200000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    batch_size: int = 20000 #~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
     epochs: int = 1000
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
@@ -55,6 +55,7 @@ class BaseConfig:
     dim_out: int = 1
     num_layers: int = 2
     lr: float = 5e-3  # G requires training with a custom lr, usually lr * 0.1 
+    dropout: float = 0.0
 
     def export_to_txt(self, file_path: str = "") -> None:
         with open(file_path + "config.txt", "w") as f:
@@ -74,6 +75,9 @@ if __name__ == "__main__":
     parser.add_argument("--n_levels", help="number of levels", type=int, required=False)
     parser.add_argument("--n_features_per_level", help="n_features_per_level", type=int, required=False)
     parser.add_argument("--num_layers", help="number of layers for decoder", type=int, required=False)
+    parser.add_argument("--dropout", help="Dropout for decoder", type=float, required=False)
+
+    
 
     args = parser.parse_args()
 
@@ -166,7 +170,8 @@ class HashMLP(pl.LightningModule):
                 # torch.nn.Linear(in_features=in_features, out_features=self.dim_out if i == (self.n_layers - 1) else self.dim_hidden),
                 torch.nn.BatchNorm1d(num_features=self.dim_out if i == (self.n_layers - 1) else self.dim_hidden), #you can do batchnorm 3D + 1D and cat after
                 # torch.nn.ReLU()
-                torch.nn.GELU()
+                torch.nn.GELU(),
+                torch.nn.Dropout(p=config.dropout, inplace=False),
             )
             self.decoder.append(block)
             
@@ -254,19 +259,19 @@ train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size
 test_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
 
 #Tinyset, 1 timepoint. TODO: try with 2 later
-# tinyY= Y = torch.FloatTensor(data[..., [3, 7, 13]]).reshape(-1, 1) #TODO: Activate this for brain
-tinyY= Y = torch.FloatTensor(data[..., 4]).reshape(-1, 1)
+tinyY= Y = torch.FloatTensor(data[..., [3, 7, 13]]).reshape(-1, 1) #TODO: Activate this for brain
+# tinyY= Y = torch.FloatTensor(data[..., 4]).reshape(-1, 1)
 tinyY = tinyY / Y.max()   
 
-# if len(config.image_shape) == 4:
-#     coords = torch.FloatTensor(mgrid[:,:,:,[3, 7, 13],:])
-# if len(config.image_shape) == 3:
-#     coords = torch.FloatTensor(mgrid[:,:,[3, 7, 13],:])
+if len(config.image_shape) == 4:
+    coords = torch.FloatTensor(mgrid[:,:,:,[3, 7, 13],:])
+if len(config.image_shape) == 3:
+    coords = torch.FloatTensor(mgrid[:,:,[3, 7, 13],:])
 
-if config.dim_in ==3:
-    coords = torch.FloatTensor(mgrid[:,:,4,:])
-if config.dim_in ==4:
-    coords = torch.FloatTensor(mgrid[:,:,:,4,:])
+# if config.dim_in ==3:
+#     coords = torch.FloatTensor(mgrid[:,:,4,:])d
+# if config.dim_in ==4:
+#     coords = torch.FloatTensor(mgrid[:,:,:,4,:])
 
 tinyX = coords.reshape(len(tinyY), config.dim_in)
     

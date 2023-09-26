@@ -1,14 +1,19 @@
-python implementation_paper.py --n_frequencies 1056  &&
-python implementation_paper.py --n_frequencies 1408  &&
-python implementation_paper.py --n_frequencies 2128  &&
-python implementation_paper.py --n_frequencies 352 --batch_size 200000 --epochs 200 &&
-python implementation_paper.py --n_frequencies 704 --batch_size 200000 --epochs 200 &&
-python implementation_paper.py --n_frequencies 1056 --batch_size 200000 --epochs 200 &&
-python implementation_paper.py --n_frequencies 1408 --batch_size 200000 --epochs 200 &&
-python implementation_paper.py --n_frequencies 2128 --batch_size 200000 --epochs 200 &&
-python implementation_paper.py --n_frequencies 352 --batch_size 500000 --epochs 500 &&
-python implementation_paper.py --n_frequencies 704 --batch_size 500000 --epochs 500 &&
-python implementation_paper.py --n_frequencies 1056 --batch_size 500000 --epochs 500 &&
-python implementation_paper.py --n_frequencies 1408 --batch_size 500000 --epochs 500 &&
-python implementation_paper.py --n_frequencies 2128 --batch_size 500000 --epochs 500 
+python hash_experimentation.py --dropout 0.1 &&
+python hash_experimentation.py --n_levels 4 --dropout 0.1 &&
+python hash_experimentation.py --n_levels 6 --dropout 0.1 &&
+python hash_experimentation.py --n_levels 10 --dropout 0.1 &&
+python hash_experimentation.py --dropout 0.2 &&
+python hash_experimentation.py --n_levels 4 --dropout 0.2 &&
+python hash_experimentation.py --n_levels 6 --dropout 0.2 &&
+python hash_experimentation.py --n_levels 10 --dropout 0.2 &&
+python hash_experimentation.py --dropout 0.2 --dim_hidden 128 &&
+python hash_experimentation.py --n_levels 4 --dropout 0.2 --dim_hidden 128 &&
+python hash_experimentation.py --n_levels 6 --dropout 0.2 --dim_hidden 128 &&
+python hash_experimentation.py --n_levels 10 --dropout 0.2 --dim_hidden 128
+
+
+
+
+
+
 
