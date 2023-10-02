@@ -31,9 +31,7 @@ torch.manual_seed(1337)
 
 @dataclass
 class BaseConfig:
-    checkpoint_path: Optional[
-        str
-    ] = None  #'lightning_logs/version_66/checkpoints/epoch=49-step=5000.ckpt'
+    checkpoint_path: Optional[str] = None  #'lightning_logs/version_66/checkpoints/epoch=49-step=5000.ckpt'
     log: str = None
     # image_path: str = '/mnt/Data/FetalAtlas/template_T2.nii.gz'
     image_path: str = "/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz"
