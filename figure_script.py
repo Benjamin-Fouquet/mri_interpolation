@@ -1,11 +1,7 @@
 '''
 Script for generating figures from locally saved logs
-
-TODO:
-Back and forth animation through slice. More complicated than expected
 '''
 import nibabel as nib 
-from dataclasses import dataclass
 import os
 import matplotlib.pyplot as plt
 import imageio
@@ -13,16 +9,7 @@ import imageio
 log_number = 21
 log_path = f'/home/benjamin/results_repaper/version_{log_number}/' 
 
-
-# file = 'interpolation'
-# file = 'interpolation(352, 352, 30)'
-# file = 'pred'
-# file = 'interpolation(117, 159, 126, 60)'
-# file = 'itk_interpolated_60'
-# file = 'interpolation(352, 352, 6, 60)'
-# file = 'interpolation(352, 352, 6, 30)'
-file = 'ground_truth_normalized'
-
+file = 'pred' #put name of file here
 
 im = nib.load(log_path + f'{file}.nii.gz').get_fdata()
 

@@ -3,33 +3,15 @@ Datamodules for MRI interpolation. Each module comes with an optional 2D MNIST s
 Data options:
 -MNIST for tests
 -DHCP for real deal
-TODO:
--normalisation is manual and hardcoded, not great
 """
-
-import argparse
-import copy
-import math
 import os
-import sys
-from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple, Union
-
 import matplotlib.pyplot as plt
-# import torchio as tio
 import nibabel as nib
-# import pytorch_lightning as pl
 import numpy as np
 import pytorch_lightning as pl
 import torch
-from torch import nn
-from torch.autograd import Variable
-from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset, TensorDataset
-
 import torchvision
-from einops import rearrange
-from utils import create_rn_mask
 
 def display_output(batch):
     '''
@@ -141,7 +123,7 @@ class MriImage(Dataset):
     coordinates are returned in x
     Intensity is returned in y
     '''
-    def __init__(self, config, image_path=None, *args, **kwargs):
+    def __init__(self, config, image_path: str = None, norm_siren: bool = False, *args, **kwargs):
         super().__init__()
         if image_path:
             image = nib.load(image_path)
@@ -150,8 +132,12 @@ class MriImage(Dataset):
         image = image.get_fdata(dtype=np.float32) 
 
         axes = []
-        for s in image.shape:
-            axes.append(torch.linspace(0, 1, s))
+        if norm_siren:
+            for s in image.shape:
+                axes.append(torch.linspace(-1, 1, s))
+        else:
+            for s in image.shape:
+                axes.append(torch.linspace(0, 1, s))
 
         mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
 
@@ -159,7 +145,10 @@ class MriImage(Dataset):
         pixels = torch.FloatTensor(image)
         pixels = pixels.flatten()
         # normalisation
-        pixels = ((pixels - torch.min(pixels)) / (torch.max(pixels) - torch.min(pixels))) #* 2 - 1
+        if norm_siren:
+            pixels = ((pixels - torch.min(pixels)) / (torch.max(pixels) - torch.min(pixels))) * 2 - 1
+        else:
+            pixels = ((pixels - torch.min(pixels)) / (torch.max(pixels) - torch.min(pixels))) #* 2 - 1
         coords = torch.FloatTensor(mgrid)
         coords = coords.reshape(len(pixels), config.dim_in)
         assert len(coords) == len(pixels)
@@ -193,7 +182,7 @@ class MriDataModule(pl.LightningDataModule):
         self.test_ds = self.dataset
         self.val_ds = self.dataset
 
-    def setup(self, normalisation: str = "zero centered"):
+    def setup(self):
         pass
 
     def train_dataloader(self) -> DataLoader:
@@ -227,13 +216,17 @@ class MriDataModule(pl.LightningDataModule):
             num_workers=self.config.num_workers,
         )
 
-    def upsampling(self, shape, batch_size):
+    def upsampling(self, shape, batch_size, norm_siren: False):
         '''
         Returns a mock loader for upsampling using implicit representation
         '''
         axes = []
-        for s in shape:
-            axes.append(torch.linspace(0, 1, s))
+        if norm_siren:
+            for s in shape:
+                axes.append(torch.linspace(-1, 1, s))
+        else:
+            for s in shape:
+                axes.append(torch.linspace(0, 1, s))
 
         mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
         fake_pix = torch.zeros(np.product(shape))
