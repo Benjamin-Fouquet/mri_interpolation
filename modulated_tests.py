@@ -1,42 +1,42 @@
-import torch
-from torch import nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+import math
 import os
 
-from PIL import Image
-from torchvision.transforms import Resize, Compose, ToTensor, Normalize
-import numpy as np
-import skimage
 import matplotlib.pyplot as plt
-import pytorch_lightning as pl
 import nibabel as nib
-import math
+import numpy as np
+import pytorch_lightning as pl
+import skimage
 import tinycudann as tcnn
+import torch
+import torch.nn.functional as F
+from PIL import Image
+from torch import nn
+from torch.utils.data import DataLoader, Dataset
+from torchvision.transforms import Compose, Normalize, Resize, ToTensor
 
 batch_size = 20000
 epochs = 200
 dim_hidden = 352
 
-#Première étape, charger une image IRM
-image_path = '/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz'
+# Première étape, charger une image IRM
+image_path = "/mnt/Data/Equinus_BIDS_dataset/sourcedata/sub_E01/sub_E01_dynamic_MovieClear_active_run_12.nii.gz"
 
 mri_image = nib.load(image_path)
 
 data = mri_image.get_fdata(dtype=np.float32)
-data = data[:,:,3, 7] #commencons en 2D
+data = data[:, :, 3, 7]  # commencons en 2D
 image_shape = data.shape
 dim_in = len(data.shape)
 
-plt.imshow(data.T, origin='lower', cmap='gray')
+plt.imshow(data.T, origin="lower", cmap="gray")
 
-'''
+"""
 Reference: Sitzmann et al, Implicit Neural Representations with Periodic Activation Functions
 
 Notebook: https://colab.research.google.com/github/vsitzmann/siren/blob/master/explore_siren.ipynb#scrollTo=39Mf3epV8Ib2
-'''
+"""
 
-#utilitaires pour Siren
+# utilitaires pour Siren
 def exists(val):
     return val is not None
 
@@ -52,13 +52,14 @@ class Sine(nn.Module):
 
     def forward(self, x):
         return torch.sin(self.w0 * x)
-        # return (torch.sin(self.w0 * x) + 1) / 2 
+        # return (torch.sin(self.w0 * x) + 1) / 2
 
 
 class Siren(nn.Module):
-    '''
+    """
     Siren layer
-    '''
+    """
+
     def __init__(
         self,
         dim_in,
@@ -98,7 +99,7 @@ class Siren(nn.Module):
 
 # siren network
 class SirenNet(pl.LightningModule):
-    '''
+    """
     PURPOSE:
         Implicit representation of arbitrary functions. Mainly used for 2D, 3D image interpolation
     ATTRIBUTES:
@@ -119,7 +120,8 @@ class SirenNet(pl.LightningModule):
         training step: forward pass + backprop
         predict step: used for inference
         configure_optimizer: optimizer linked to model
-    '''
+    """
+
     def __init__(
         self,
         dim_in: int = 3,
@@ -200,20 +202,23 @@ class SirenNet(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         return optimizer
-    
+
+
 model = SirenNet(
     dim_in=len(data.shape),
     dim_hidden=dim_hidden,
 )
 
-'''
+"""
 Reference: Mehta et al.: Modulated Periodic Activations for Generalizable Local Functional Representations
-'''
+"""
+
 
 class Modulator(nn.Module):
     """
     Modulator as per paper 'Modulated periodic activations for generalizable local functional representations'
     """
+
     def __init__(self, dim_in, dim_hidden, num_layers):
         super().__init__()
         self.layers = nn.ModuleList([])
@@ -234,6 +239,7 @@ class Modulator(nn.Module):
             x = torch.cat((x, z), dim=1)
 
         return tuple(hiddens)
+
 
 class ModulatedSirenNet(pl.LightningModule):
     """
@@ -315,33 +321,32 @@ class ModulatedSirenNet(pl.LightningModule):
     def predict_step(self, batch, batch_idx):
         x, y = batch
         return self(x)
-    
 
 
 ###################
-#Passons en 2D + t#
+# Passons en 2D + t#
 ###################
 
 batch_size = 30000
 epochs = 50
 
-#On augmente la dimension de l'image
+# On augmente la dimension de l'image
 mri_image = nib.load(image_path)
 
 data = mri_image.get_fdata(dtype=np.float32)
-data = data[:,:,3,:] #largeur, hauteur, nombre de slices, nombre de frames
+data = data[:, :, 3, :]  # largeur, hauteur, nombre de slices, nombre de frames
 image_shape = data.shape
 dim_in = len(data.shape)
-#data.transpose()
+# data.transpose()
 
 Y = torch.FloatTensor(data).reshape(-1, 1)
-Y = Y / Y.max() #* 2 -1
+Y = Y / Y.max()  # * 2 -1
 
 axes = []
 for s in image_shape:
     axes.append(torch.linspace(0, 1, s))
 
-mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+mgrid = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1)
 
 coords = torch.FloatTensor(mgrid)
 
@@ -349,10 +354,13 @@ X = coords.reshape(len(Y), dim_in)
 
 dataset = torch.utils.data.TensorDataset(X, Y)
 
-train_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=os.cpu_count())
+train_loader = torch.utils.data.DataLoader(
+    dataset, batch_size=batch_size, shuffle=True, num_workers=os.cpu_count()
+)
 
-test_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=os.cpu_count())
-
+test_loader = torch.utils.data.DataLoader(
+    dataset, batch_size=batch_size, shuffle=False, num_workers=os.cpu_count()
+)
 
 
 # Y = torch.FloatTensor(data).reshape(-1, 1)
@@ -395,14 +403,14 @@ im = np.array(im, dtype=np.float32)
 im = im[..., 7]
 
 gt = data[..., 7]
-gt = gt /gt.max() * 2 - 1
+gt = gt / gt.max() * 2 - 1
 
 diff = im - gt
 
 fig, axes = plt.subplots(1, 3)
 
-axes[0].imshow(gt.T, origin='lower', cmap='gray')
-axes[1].imshow(im.T, origin='lower', cmap='gray')
-axes[2].imshow(diff.T, origin='lower', cmap='gray')
-     
-plt.savefig('output.png')
+axes[0].imshow(gt.T, origin="lower", cmap="gray")
+axes[1].imshow(im.T, origin="lower", cmap="gray")
+axes[2].imshow(diff.T, origin="lower", cmap="gray")
+
+plt.savefig("output.png")

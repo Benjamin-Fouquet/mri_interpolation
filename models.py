@@ -9,16 +9,16 @@ TODO:
 import math
 from typing import Any
 
+import commentjson as json
 import pytorch_lightning as pl
+import tinycudann as tcnn
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-import commentjson as json
-import tinycudann as tcnn
 from einops import rearrange
 
-#utils for siren
+
+# utils for siren
 def exists(val):
     return val is not None
 
@@ -37,9 +37,10 @@ class Sine(nn.Module):
 
 
 class Siren(nn.Module):
-    '''
+    """
     Siren layer
-    '''
+    """
+
     def __init__(
         self,
         dim_in,
@@ -79,7 +80,7 @@ class Siren(nn.Module):
 
 # siren network
 class SirenNet(pl.LightningModule):
-    '''
+    """
     PURPOSE:
         Implicit representation of arbitrary functions. Mainly used for 2D, 3D image interpolation
     ATTRIBUTES:
@@ -100,7 +101,8 @@ class SirenNet(pl.LightningModule):
         training step: forward pass + backprop
         predict step: used for inference
         configure_optimizer: optimizer linked to model
-    '''
+    """
+
     def __init__(
         self,
         dim_in: int = 3,
@@ -198,6 +200,7 @@ class Modulator(nn.Module):
     """
     Modulator as per paper 'Modulated periodic activations for generalizable local functional representations'
     """
+
     def __init__(self, dim_in, dim_hidden, num_layers):
         super().__init__()
         self.layers = nn.ModuleList([])
@@ -225,6 +228,7 @@ class FourierNet(pl.LightningModule):
     """
     First layer sin combined with MLP ReLU. Does not work
     """
+
     def __init__(
         self,
         dim_in=3,
@@ -285,7 +289,9 @@ class FourierNet(pl.LightningModule):
         return self(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr) ,#weight_decay=1e-5)
+        optimizer = (
+            torch.optim.Adam(self.parameters(), lr=self.lr),
+        )  # weight_decay=1e-5)
         return optimizer
 
     def set_parameters(self, theta):
@@ -302,10 +308,10 @@ class FourierNet(pl.LightningModule):
 
 class PsfSirenNet(SirenNet):
     """
-    Psf Siren. 
+    Psf Siren.
     x is expanded at each step via x_to_psf_x. Optimisation can be done by including most calculation in the init
     psf convolution on y is done via a 1D conv layer. Atm the forward pass is modified so that the conv is done in the batch dimension, with a test. An optimisation is either to pu conv last instead of identity and
-    not test each time for layer, or create a dedicated method 
+    not test each time for layer, or create a dedicated method
     """
 
     def __init__(
@@ -517,7 +523,7 @@ class ModulatedSirenNet(pl.LightningModule):
         return self.siren.last_layer(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-5)
         return optimizer
 
     def training_step(self, batch, batch_idx):
@@ -607,7 +613,7 @@ class HashSirenNet(pl.LightningModule):
         return self.siren.last_layer(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-5)
         return optimizer
 
     def training_step(self, batch, batch_idx):
@@ -626,30 +632,28 @@ class HashSirenNet(pl.LightningModule):
 
 
 class HashMLP(pl.LightningModule):
-    '''
-    Lightning module for HashMLP. 
-    '''
-    def __init__(
-        self,
-        dim_in,
-        dim_out,
-        config,
-        lr,
-        *args,
-        **kwargs
-    ):
+    """
+    Lightning module for HashMLP.
+    """
+
+    def __init__(self, dim_in, dim_out, config, lr, *args, **kwargs):
         super().__init__()
         self.config = config
         self.dim_in = dim_in
         self.dim_out = dim_out
         self.lr = lr
-        self.losses =[]
+        self.losses = []
         self.latents = []
 
-        self.encoder = tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding'])
-        self.decoder= tcnn.Network(n_input_dims=self.encoder.n_output_dims, n_output_dims=dim_out, network_config=config['network'])
+        self.encoder = tcnn.Encoding(
+            n_input_dims=dim_in, encoding_config=config["encoding"]
+        )
+        self.decoder = tcnn.Network(
+            n_input_dims=self.encoder.n_output_dims,
+            n_output_dims=dim_out,
+            network_config=config["network"],
+        )
         # self.model = torch.nn.Sequential(self.encoder, self.decoder)
-
 
     def forward(self, x):
         z = self.encoder(x)
@@ -657,7 +661,7 @@ class HashMLP(pl.LightningModule):
         return y_pred
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr) #weight_decay=1e-5
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)  # weight_decay=1e-5
         return optimizer
 
     def training_step(self, batch, batch_idx):
@@ -670,7 +674,7 @@ class HashMLP(pl.LightningModule):
 
         self.log("train_loss", loss)
         return loss
-    
+
     def predict_step(self, batch, batch_idx):
         x, y = batch
         z = self.encoder(x)
@@ -681,54 +685,54 @@ class HashMLP(pl.LightningModule):
     def get_latents(self):
         return self.latents
 
+
 class MultiHashMLP(pl.LightningModule):
-    '''
-    Lightning module for MultiHashMLP. 
+    """
+    Lightning module for MultiHashMLP.
     Batch size = 1 means whole volume, setup this way as you need the frame idx
-    '''
-    def __init__(
-        self,
-        dim_in,
-        dim_out,
-        n_frames,
-        config,
-        lr,
-        *args,
-        **kwargs
-    ):
+    """
+
+    def __init__(self, dim_in, dim_out, n_frames, config, lr, *args, **kwargs):
         super().__init__()
         self.config = config
         self.dim_in = dim_in
         self.dim_out = dim_out
         self.n_frames = n_frames
         self.lr = lr
-        self.losses =[]
+        self.losses = []
         self.latents = []
 
         self.encoders = nn.ModuleList()
         for _ in range(self.n_frames):
-            self.encoders.append(tcnn.Encoding(n_input_dims=dim_in, encoding_config=config['encoding']))
-        self.decoder= tcnn.Network(n_input_dims=self.config["encoding"]["n_levels"] * self.config["encoding"]["n_features_per_level"], n_output_dims=dim_out, network_config=config['network'])
+            self.encoders.append(
+                tcnn.Encoding(n_input_dims=dim_in, encoding_config=config["encoding"])
+            )
+        self.decoder = tcnn.Network(
+            n_input_dims=self.config["encoding"]["n_levels"]
+            * self.config["encoding"]["n_features_per_level"],
+            n_output_dims=dim_out,
+            network_config=config["network"],
+        )
 
         # if torch.cuda.is_available():
         #     self.decoder.to('cuda')
 
-        self.automatic_optimization = True #set to False if you need to propagate gradients manually. Usually lightning does a good job at no_grading models not used for a particular training step. Also, grads are not propagated in inctive leaves
+        self.automatic_optimization = True  # set to False if you need to propagate gradients manually. Usually lightning does a good job at no_grading models not used for a particular training step. Also, grads are not propagated in inctive leaves
 
     def forward(self, x, frame_idx):
-        z =self.encoders[frame_idx](x)
+        z = self.encoders[frame_idx](x)
         y_pred = self.decoder(z)
         return y_pred
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-5)
         return optimizer
 
     def training_step(self, batch, batch_idx):
         x, y, frame_idx = batch
         x = x.squeeze(0)
         y = y.squeeze(0)
-        z = self.encoders[frame_idx](x) #pred, model(x)
+        z = self.encoders[frame_idx](x)  # pred, model(x)
         y_pred = self.decoder(z)
         loss = F.mse_loss(y_pred, y)
 
@@ -738,9 +742,9 @@ class MultiHashMLP(pl.LightningModule):
         return loss
 
     def predict_step(self, batch, batch_idx):
-        '''
+        """
         TODO: adapt for frame adaptive.
-        '''
+        """
         x, y, frame_idx = batch
         x = x.squeeze(0)
         y = y.squeeze(0)
@@ -748,27 +752,19 @@ class MultiHashMLP(pl.LightningModule):
         self.latents.append(z)
         y_pred = self.decoder(z)
         return y_pred
-    
+
     def get_latents(self):
         return self.latents
 
 
-
 class MultiSiren(pl.LightningModule):
-    '''
-    Lightning module for MultiHashMLP. 
+    """
+    Lightning module for MultiHashMLP.
     Batch size = 1 means whole volume, setup this way as you need the frame idx
-    '''
+    """
+
     def __init__(
-        self,
-        dim_in,
-        dim_hidden,
-        dim_out,
-        num_layers,
-        n_frames,
-        lr,
-        *args,
-        **kwargs
+        self, dim_in, dim_hidden, dim_out, num_layers, n_frames, lr, *args, **kwargs
     ):
         super().__init__()
         self.dim_in = dim_in
@@ -777,29 +773,41 @@ class MultiSiren(pl.LightningModule):
         self.num_layers = num_layers
         self.n_frames = n_frames
         self.lr = lr
-        self.losses =[]
+        self.losses = []
 
         self.encoders = nn.ModuleList()
         for _ in range(self.n_frames):
-            self.encoders.append(SirenNet(dim_in=self.dim_in, dim_hidden=self.dim_hidden, dim_out=self.dim_hidden, num_layers=self.num_layers))
-        self.decoder= SirenNet(dim_in=self.dim_hidden, dim_hidden=self.dim_hidden, dim_out=self.dim_out, num_layers=self.num_layers)
+            self.encoders.append(
+                SirenNet(
+                    dim_in=self.dim_in,
+                    dim_hidden=self.dim_hidden,
+                    dim_out=self.dim_hidden,
+                    num_layers=self.num_layers,
+                )
+            )
+        self.decoder = SirenNet(
+            dim_in=self.dim_hidden,
+            dim_hidden=self.dim_hidden,
+            dim_out=self.dim_out,
+            num_layers=self.num_layers,
+        )
 
-        self.automatic_optimization = True #set to False if you need to propagate gradients manually. Usually lightning does a good job at no_grading models not used for a particular training step. Also, grads are not propagated in inctive leaves
+        self.automatic_optimization = True  # set to False if you need to propagate gradients manually. Usually lightning does a good job at no_grading models not used for a particular training step. Also, grads are not propagated in inctive leaves
 
     def forward(self, x, frame_idx):
-        z =self.encoders[frame_idx](x)
+        z = self.encoders[frame_idx](x)
         y_pred = self.decoder(z)
         return y_pred
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr ,weight_decay=1e-5)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-5)
         return optimizer
 
     def training_step(self, batch, batch_idx):
         x, y, frame_idx = batch
         x = x.squeeze(0)
         y = y.squeeze(0)
-        z = self.encoders[frame_idx](x) #pred, model(x)
+        z = self.encoders[frame_idx](x)  # pred, model(x)
         y_pred = self.decoder(z)
         loss = F.mse_loss(y_pred, y)
 
@@ -809,23 +817,23 @@ class MultiSiren(pl.LightningModule):
         return loss
 
     def predict_step(self, batch, batch_idx):
-        '''
+        """
         TODO: adapt for frame adaptive.
-        '''
+        """
         x, y, frame_idx = batch
         x = x.squeeze(0)
         y = y.squeeze(0)
-        z = self.encoders[frame_idx](x) #pred, model(x)
+        z = self.encoders[frame_idx](x)  # pred, model(x)
         y_pred = self.decoder(z)
         return y_pred
 
 
-'''
+"""
 Earlier models for tests
-'''
+"""
 # class HashMLP(pl.LightningModule):
 #     '''
-#     Lightning module for HashMLP. 
+#     Lightning module for HashMLP.
 #     '''
 #     def __init__(
 #         self,
@@ -870,7 +878,7 @@ Earlier models for tests
 
 # class MultiHashMLP(pl.LightningModule):
 #     '''
-#     Lightning module for MultiHashMLP. 
+#     Lightning module for MultiHashMLP.
 #     Batch size = 1 means whole volume, setup this way as you need the frame idx
 #     '''
 #     def __init__(
@@ -936,7 +944,7 @@ Earlier models for tests
 
 # class MultiSiren(pl.LightningModule):
 #     '''
-#     Lightning module for MultiHashMLP. 
+#     Lightning module for MultiHashMLP.
 #     Batch size = 1 means whole volume, setup this way as you need the frame idx
 #     '''
 #     def __init__(

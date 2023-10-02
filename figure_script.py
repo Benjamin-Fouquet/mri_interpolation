@@ -1,23 +1,24 @@
-'''
+"""
 Script for generating figures from locally saved logs
-'''
-import nibabel as nib 
+"""
 import os
-import matplotlib.pyplot as plt
+
 import imageio
+import matplotlib.pyplot as plt
+import nibabel as nib
 
 log_number = 21
-log_path = f'/home/benjamin/results_repaper/version_{log_number}/' 
+log_path = f"/home/benjamin/results_repaper/version_{log_number}/"
 
-file = 'pred' #put name of file here
+file = "pred"  # put name of file here
 
-im = nib.load(log_path + f'{file}.nii.gz').get_fdata()
+im = nib.load(log_path + f"{file}.nii.gz").get_fdata()
 
-dimension = '2D'
+dimension = "2D"
 
 if len(im.shape) == 4:
-    im = im[:,:,3,:]
-    dimension = '3D'
+    im = im[:, :, 3, :]
+    dimension = "3D"
 
 
 fig, axes = plt.subplots(3, 5)
@@ -29,47 +30,43 @@ for j in range(5):
         axes[i][j].imshow(data.T, origin="lower", cmap="gray")
 
 
-with open(f'/home/benjamin/results_repaper/version_{log_number}/config.txt', 'r') as f:
+with open(f"/home/benjamin/results_repaper/version_{log_number}/config.txt", "r") as f:
     lines = f.readlines()
 
-config = {}    
+config = {}
 for line in lines:
-    #remove \n
+    # remove \n
     line = line[:-1]
-    #split before and after :
-    key, value = line.split(':')
-    key = key[:-1] #remove space
+    # split before and after :
+    key, value = line.split(":")
+    key = key[:-1]  # remove space
     value = value[1:]
     config[key] = value
 
-enco = config['encoder_type']
+enco = config["encoder_type"]
 
-title = f'{file}_{enco}_{dimension}' #all attached as used for file names
+title = f"{file}_{enco}_{dimension}"  # all attached as used for file names
 
-# fig.suptitle(title, fontsize=16)        
-plt.savefig(log_path + f'{title}.png')
+# fig.suptitle(title, fontsize=16)
+plt.savefig(log_path + f"{title}.png")
 plt.clf()
 
 filenames = []
 
 for idx in range(im.shape[-1]):
     plt.imshow(im[..., idx].T, origin="lower", cmap="gray")
-    # fig.suptitle(title, fontsize=16)   
-    filename = f'file_{idx}.png'
+    # fig.suptitle(title, fontsize=16)
+    filename = f"file_{idx}.png"
     plt.savefig(filename)
     plt.close()
     filenames.append(filename)
-    
+
 # build gif
-with imageio.get_writer(log_path + f'{title}.gif', mode='I') as writer:
+with imageio.get_writer(log_path + f"{title}.gif", mode="I") as writer:
     for filename in filenames:
         image = imageio.imread(filename)
         writer.append_data(image)
-        
+
 # Remove files
 for filename in set(filenames):
     os.remove(filename)
-
-
-        
-

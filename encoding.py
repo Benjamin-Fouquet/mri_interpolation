@@ -3,9 +3,10 @@ import math
 
 # --- 3rd party ---
 import numpy as np
+import pytorch_lightning as pl
 import torch
 from torch import nn
-import pytorch_lightning as pl
+
 from utils import create_mgrid
 
 # --- my module ---
@@ -42,13 +43,13 @@ PRIMES = (1, 2654435761, 805459861, 3674653429, 2097192037, 1434869437, 21652197
 class Frequency(nn.Module):
     def __init__(self, dim: int, n_levels: int = 10):
         """Positional encoding from NeRF: https://www.matthewtancik.com/nerf
-    [sin(x), cos(x), sin(4x), cos(4x), sin(8x), cos(8x),
-      ..., sin(2^n*x), cos(2^n*x)]
+        [sin(x), cos(x), sin(4x), cos(4x), sin(8x), cos(8x),
+          ..., sin(2^n*x), cos(2^n*x)]
 
-    Args:
-      dim (int): input dimensions
-      n_levels (int, optional): number of frequencies. Defaults to 10.
-    """
+        Args:
+          dim (int): input dimensions
+          n_levels (int, optional): number of frequencies. Defaults to 10.
+        """
         super().__init__()
         self.n_levels = n_levels
         assert self.n_levels > 0
@@ -68,13 +69,14 @@ class Frequency(nn.Module):
 @torch.no_grad()
 def fast_hash(ind: torch.Tensor, primes: torch.Tensor, hashmap_size: int):
     """Hashing function from:
-  https://github.com/NVlabs/tiny-cuda-nn/blob/master/include/tiny-cuda-nn/encodings/grid.h#L76-L92
-  """
+    https://github.com/NVlabs/tiny-cuda-nn/blob/master/include/tiny-cuda-nn/encodings/grid.h#L76-L92
+    """
     d = ind.shape[-1]
     ind = (ind * primes[:d]) & 0xFFFFFFFF  # uint32
     for i in range(1, d):
         ind[..., 0] ^= ind[..., i]
     return ind[..., 0] % hashmap_size
+
 
 class _HashGrid(nn.Module):
     def __init__(self, dim: int, n_features: int, hashmap_size: int, resolution: float):
@@ -137,23 +139,23 @@ class MultiResHashGrid(nn.Module):
         finest_resolution: int = 512,
     ):
         """NVidia's hash grid encoding
-    https://nvlabs.github.io/instant-ngp/
+        https://nvlabs.github.io/instant-ngp/
 
-    The output dimensions is `n_levels` * `n_features_per_level`,
-    or your can simply access `model.output_dim` to get the output dimensions
+        The output dimensions is `n_levels` * `n_features_per_level`,
+        or your can simply access `model.output_dim` to get the output dimensions
 
-    Args:
-      dim (int): input dimensions, supports at most 7D data.
-      n_levels (int, optional): number of grid levels. Defaults to 16.
-      n_features_per_level (int, optional): number of features per grid level.
-        Defaults to 2.
-      log2_hashmap_size (int, optional): maximum size of the hashmap of each
-        level in log2 scale. According to the paper, this value can be set to
-        14 ~ 24 depending on your problem size. Defaults to 15.
-      base_resolution (int, optional): coarsest grid resolution. Defaults to 16.
-      finest_resolution (int, optional): finest grid resolution. According to
-        the paper, this value can be set to 512 ~ 524288. Defaults to 512.
-    """
+        Args:
+          dim (int): input dimensions, supports at most 7D data.
+          n_levels (int, optional): number of grid levels. Defaults to 16.
+          n_features_per_level (int, optional): number of features per grid level.
+            Defaults to 2.
+          log2_hashmap_size (int, optional): maximum size of the hashmap of each
+            level in log2 scale. According to the paper, this value can be set to
+            14 ~ 24 depending on your problem size. Defaults to 15.
+          base_resolution (int, optional): coarsest grid resolution. Defaults to 16.
+          finest_resolution (int, optional): finest grid resolution. According to
+            the paper, this value can be set to 512 ~ 524288. Defaults to 512.
+        """
         super().__init__()
         self.dim = dim
         self.n_levels = n_levels
@@ -191,11 +193,11 @@ class MultiResHashGrid(nn.Module):
 
 class _HashGridV2(pl.LightningModule):
     def __init__(self, dim: int, n_features: int, hashmap_size: int, resolution: float):
-        '''
+        """
         -Create embedding of size (hash_size, n_features)
         -define number of neighbours and their indices
         -check if neighbour is one away from a particular point(?)
-        '''
+        """
         super().__init__()
         self.dim = dim
         self.n_features = n_features
@@ -215,14 +217,20 @@ class _HashGridV2(pl.LightningModule):
         self.register_buffer("primes", primes, persistent=False)
 
         # create interpolation binary mask
-        n_neigs = 1 << self.dim # equivalent to 2 ** self.dim, set number of neighbors
-        neigs = np.arange(n_neigs, dtype=np.int64).reshape((-1, 1)) #list of indices from 0 to n_neigs
-        dims = np.arange(self.dim, dtype=np.int64).reshape((1, -1)) #list of dim indices
-        bin_mask = torch.tensor(neigs & (1 << dims) == 0, dtype=bool)  # (neig, dim)  neigs & (1 << dims) == 0 means if neigs and dims are different then True
+        n_neigs = 1 << self.dim  # equivalent to 2 ** self.dim, set number of neighbors
+        neigs = np.arange(n_neigs, dtype=np.int64).reshape(
+            (-1, 1)
+        )  # list of indices from 0 to n_neigs
+        dims = np.arange(self.dim, dtype=np.int64).reshape(
+            (1, -1)
+        )  # list of dim indices
+        bin_mask = torch.tensor(
+            neigs & (1 << dims) == 0, dtype=bool
+        )  # (neig, dim)  neigs & (1 << dims) == 0 means if neigs and dims are different then True
         self.register_buffer("bin_mask", bin_mask, persistent=False)
 
     def forward(self, x: torch.Tensor):
-        '''
+        """
         scale x to current target resolution.
         isolate x_int, becomes indices
         isolate x_float, will become weighting of each neighbour indice
@@ -232,11 +240,13 @@ class _HashGridV2(pl.LightningModule):
         w is product of ws
         fetch the relevant features via hashmap
         return the sum of the features * w for all possiblities (?)
-        '''
-        bdims = len(x.shape[:-1]) #used to match the shape of the mask afterwards
-        x = x * self.resolution.to(self.device) #multiply the 0-1 range by the resolution (giving indices ?), scale indices to resolution. int part become closest edge ?
-        x_int = x.long() #convertion to int, isolate indices ?
-        x_float = x - x_int.float().detach() #decimal part of x
+        """
+        bdims = len(x.shape[:-1])  # used to match the shape of the mask afterwards
+        x = x * self.resolution.to(
+            self.device
+        )  # multiply the 0-1 range by the resolution (giving indices ?), scale indices to resolution. int part become closest edge ?
+        x_int = x.long()  # convertion to int, isolate indices ?
+        x_float = x - x_int.float().detach()  # decimal part of x
         x_int = x_int.unsqueeze(dim=-2)  # (batch..., 1, dim)
         x_float = x_float.unsqueeze(dim=-2)  # (batch..., 1, dim)
         # to match the input batch shape
@@ -246,14 +256,18 @@ class _HashGridV2(pl.LightningModule):
         # get neighbors' indices and weights on each dim
         # if torch.cuda.is_available():
         #     bin_mask = bin_mask.to('cuda')
-        inds = torch.where(bin_mask, x_int, x_int + 1)  # (b..., neig, dim) #if mask then x_int else x_int + 1. Create list of indices
+        inds = torch.where(
+            bin_mask, x_int, x_int + 1
+        )  # (b..., neig, dim) #if mask then x_int else x_int + 1. Create list of indices
         ws = torch.where(bin_mask, 1 - x_float, x_float)  # (b...., neig, dim)
         # aggregate neighbours, interp weights
         w = ws.prod(dim=-1, keepdim=True)  # (b..., neig, 1)
         # hash neighbors' id and look up table
         hash_ids = fast_hash(inds, self.primes, self.hashmap_size)  # (b..., neig)
         neig_data = self.embedding(hash_ids)  # (b..., neighbours, features)
-        return torch.sum(neig_data * w, dim=-2)  # (b..., feat) #weighting of interpolation between neighbours at this point
+        return torch.sum(
+            neig_data * w, dim=-2
+        )  # (b..., feat) #weighting of interpolation between neighbours at this point
 
 
 class MultiResHashGridV2(pl.LightningModule):
@@ -267,23 +281,23 @@ class MultiResHashGridV2(pl.LightningModule):
         finest_resolution: int = 512,
     ):
         """NVidia's hash grid encoding
-    https://nvlabs.github.io/instant-ngp/
+        https://nvlabs.github.io/instant-ngp/
 
-    The output dimensions is `n_levels` * `n_features_per_level`,
-    or your can simply access `model.output_dim` to get the output dimensions
+        The output dimensions is `n_levels` * `n_features_per_level`,
+        or your can simply access `model.output_dim` to get the output dimensions
 
-    Args:
-      dim (int): input dimensions, supports at most 7D data.
-      n_levels (int, optional): number of grid levels. Defaults to 16.
-      n_features_per_level (int, optional): number of features per grid level.
-        Defaults to 2.
-      log2_hashmap_size (int, optional): maximum size of the hashmap of each
-        level in log2 scale. According to the paper, this value can be set to
-        14 ~ 24 depending on your problem size. Defaults to 15.
-      base_resolution (int, optional): coarsest grid resolution. Defaults to 16.
-      finest_resolution (int, optional): finest grid resolution. According to
-        the paper, this value can be set to 512 ~ 524288. Defaults to 512.
-    """
+        Args:
+          dim (int): input dimensions, supports at most 7D data.
+          n_levels (int, optional): number of grid levels. Defaults to 16.
+          n_features_per_level (int, optional): number of features per grid level.
+            Defaults to 2.
+          log2_hashmap_size (int, optional): maximum size of the hashmap of each
+            level in log2 scale. According to the paper, this value can be set to
+            14 ~ 24 depending on your problem size. Defaults to 15.
+          base_resolution (int, optional): coarsest grid resolution. Defaults to 16.
+          finest_resolution (int, optional): finest grid resolution. According to
+            the paper, this value can be set to 512 ~ 524288. Defaults to 512.
+        """
         super().__init__()
         self.dim = dim
         self.n_levels = n_levels
@@ -302,7 +316,9 @@ class MultiResHashGridV2(pl.LightningModule):
             resolution = []
             for b, br in zip(b_list, base_resolution):
                 resolution.append(math.floor(br * (b ** level_idx)))
-            hashmap_size = min(max(resolution) ** dim, 2 ** log2_hashmap_size) #create table of size res ** dim if not exceed 2 ** mapsize
+            hashmap_size = min(
+                max(resolution) ** dim, 2 ** log2_hashmap_size
+            )  # create table of size res ** dim if not exceed 2 ** mapsize
             levels.append(
                 _HashGridV2(
                     dim=dim,

@@ -1,46 +1,32 @@
 """
 Launcher for trainings using datamodules and models
 """
-
 import argparse
-import copy
 import glob
 import json
-import os
 import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Tuple, Union
 
-import hydra
 import matplotlib.pyplot as plt
 import nibabel as nib
 import nibabel.processing as proc
-
 # import pytorch_lightning as pl
 import numpy as np
 import pytorch_lightning as pl
 import torch
 from einops import rearrange
-from hydra.utils import call, get_class, instantiate
-from omegaconf import DictConfig, OmegaConf
 from skimage import metrics
 from torch import nn
 from torch.nn import functional as F
-
 # import functorch
 from torchsummary import summary
 
 from config import base
 from datamodules import MriDataModule
-from models import (
-    HashMLP,
-    HashSirenNet,
-    ModulatedSirenNet,
-    MultiSiren,
-    PsfSirenNet,
-    SirenNet,
-)
+from models import (HashMLP, HashSirenNet, ModulatedSirenNet, MultiSiren,
+                    PsfSirenNet, SirenNet)
 
 torch.manual_seed(1337)
 

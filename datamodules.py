@@ -5,22 +5,24 @@ Data options:
 -DHCP for real deal
 """
 import os
+
 import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
 import pytorch_lightning as pl
 import torch
-from torch.utils.data import DataLoader, Dataset, TensorDataset
 import torchvision
+from torch.utils.data import DataLoader, Dataset, TensorDataset
+
 
 def display_output(batch):
-    '''
+    """
     Small KOL function for visualising MNIST
     Args:
         batch(tuple of tensors): x is coordinates, y is intensity
     Returns:
         None, visu only
-    '''
+    """
     x, y = batch
     x = x.squeeze()
     y = y.squeeze()
@@ -31,10 +33,11 @@ def display_output(batch):
 
 
 class MNISTDataModule(pl.LightningDataModule):
-    '''
+    """
     Datamodule for implicit representation training based on MNIST dataset
     loader returns coordinates (-1, 1) as x and intensity as y
-    '''
+    """
+
     def __init__(self, config=None):
         super().__init__()
         self.config = config
@@ -118,18 +121,21 @@ class MNISTDataModule(pl.LightningDataModule):
 
 
 class MriImage(Dataset):
-    '''
-    Dataset for implicit representation training. 
+    """
+    Dataset for implicit representation training.
     coordinates are returned in x
     Intensity is returned in y
-    '''
-    def __init__(self, config, image_path: str = None, norm_siren: bool = False, *args, **kwargs):
+    """
+
+    def __init__(
+        self, config, image_path: str = None, norm_siren: bool = False, *args, **kwargs
+    ):
         super().__init__()
         if image_path:
             image = nib.load(image_path)
         else:
             image = nib.load(config.image_path)
-        image = image.get_fdata(dtype=np.float32) 
+        image = image.get_fdata(dtype=np.float32)
 
         axes = []
         if norm_siren:
@@ -139,16 +145,20 @@ class MriImage(Dataset):
             for s in image.shape:
                 axes.append(torch.linspace(0, 1, s))
 
-        mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+        mgrid = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1)
 
         # create data tensors
         pixels = torch.FloatTensor(image)
         pixels = pixels.flatten()
         # normalisation
         if norm_siren:
-            pixels = ((pixels - torch.min(pixels)) / (torch.max(pixels) - torch.min(pixels))) * 2 - 1
+            pixels = (
+                (pixels - torch.min(pixels)) / (torch.max(pixels) - torch.min(pixels))
+            ) * 2 - 1
         else:
-            pixels = ((pixels - torch.min(pixels)) / (torch.max(pixels) - torch.min(pixels))) #* 2 - 1
+            pixels = (pixels - torch.min(pixels)) / (
+                torch.max(pixels) - torch.min(pixels)
+            )  # * 2 - 1
         coords = torch.FloatTensor(mgrid)
         coords = coords.reshape(len(pixels), config.dim_in)
         assert len(coords) == len(pixels)
@@ -190,7 +200,7 @@ class MriDataModule(pl.LightningDataModule):
             self.train_ds,
             batch_size=self.config.batch_size,
             num_workers=self.config.num_workers,
-            shuffle=True, #true allow reasonnable results with small batch size
+            shuffle=True,  # true allow reasonnable results with small batch size
             pin_memory=True,
         )
 
@@ -217,9 +227,9 @@ class MriDataModule(pl.LightningDataModule):
         )
 
     def upsampling(self, shape, batch_size, norm_siren: False):
-        '''
+        """
         Returns a mock loader for upsampling using implicit representation
-        '''
+        """
         axes = []
         if norm_siren:
             for s in shape:
@@ -228,26 +238,31 @@ class MriDataModule(pl.LightningDataModule):
             for s in shape:
                 axes.append(torch.linspace(0, 1, s))
 
-        mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+        mgrid = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1)
         fake_pix = torch.zeros(np.product(shape))
         coords = torch.FloatTensor(mgrid)
         coords = coords.reshape(len(fake_pix), len(shape))
         assert len(coords) == len(fake_pix)
         fake_pix = fake_pix.unsqueeze(-1)
-        return DataLoader(TensorDataset(coords, fake_pix), batch_size=batch_size, shuffle=False, num_workers=os.cpu_count())
+        return DataLoader(
+            TensorDataset(coords, fake_pix),
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=os.cpu_count(),
+        )
 
 
-
-#multi frame dataset et datamodule, for MultiHash especially
+# multi frame dataset et datamodule, for MultiHash especially
 class MriFrames(Dataset):
-    '''
-    Dataset for implicit representation training. 
+    """
+    Dataset for implicit representation training.
     coordinates are returned in x
     Intensity is returned in y
 
     One batch is one frame, as batches need to be labeled with the proper index
 
-    '''
+    """
+
     def __init__(self, config, image_path=None, *args, **kwargs):
         super().__init__()
         if image_path:
@@ -260,12 +275,14 @@ class MriFrames(Dataset):
         for s in self.image.shape:
             axes.append(torch.linspace(0, 1, s))
 
-        mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+        mgrid = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1)
         # create data tensors
         pixels = torch.FloatTensor(self.image)
         pixels = pixels.reshape(-1, self.image.shape[-1], 1)
         # normalisation, should be recasted with torch reshape func
-        pixels = ((pixels - torch.min(pixels)) / torch.max(pixels)) * 2 - 1 #pixels = pixels.reshpae(pixels, (-1, 1)) should also work
+        pixels = (
+            (pixels - torch.min(pixels)) / torch.max(pixels)
+        ) * 2 - 1  # pixels = pixels.reshpae(pixels, (-1, 1)) should also work
         coords = torch.FloatTensor(mgrid)
         coords = coords.reshape(len(pixels), config.dim_in, self.image.shape[-1])
         assert len(coords) == len(pixels)
@@ -276,12 +293,14 @@ class MriFrames(Dataset):
         return self.image.shape[-1]
 
     def __getitem__(self, idx):
-        return self.coords[:,:,idx], self.pixels[:,idx], idx
+        return self.coords[:, :, idx], self.pixels[:, idx], idx
+
 
 class MockMriFrames(Dataset):
-    '''
+    """
     Moch dataset used for data upsampling after training
-    '''
+    """
+
     def __init__(self, config, shape, *args, **kwargs):
         super().__init__()
         self.shape = shape
@@ -289,7 +308,7 @@ class MockMriFrames(Dataset):
         for s in shape:
             axes.append(torch.linspace(0, 1, s))
 
-        mgrid = torch.stack(torch.meshgrid(*axes, indexing='ij'), dim=-1)
+        mgrid = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1)
         # create data tensors
         # pixels = torch.FloatTensor(self.image)
         pixels = torch.ones(np.prod(shape))
@@ -305,7 +324,7 @@ class MockMriFrames(Dataset):
         return self.shape[-1]
 
     def __getitem__(self, idx):
-        return self.coords[:,:,idx], self.pixels[:,idx], idx
+        return self.coords[:, :, idx], self.pixels[:, idx], idx
 
 
 class MriFramesDataModule(pl.LightningDataModule):
@@ -362,9 +381,9 @@ class MriFramesDataModule(pl.LightningDataModule):
         )
 
     def upsampling(self, shape):
-        '''
+        """
         Returns a mock loader for upsampling using implicit representation
-        '''
+        """
         upsampled_ds = MockMriFrames(config=self.config, shape=shape)
         return DataLoader(
             upsampled_ds,
@@ -372,6 +391,3 @@ class MriFramesDataModule(pl.LightningDataModule):
             num_workers=self.config.num_workers,
             shuffle=False,
         )
-        
-        
-
