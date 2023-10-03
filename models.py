@@ -1,21 +1,98 @@
 """
 models for implicit representations
-SirenNet: Periodic representation
-HashMP: Hashing on spatial dimension
-TODO:
--fetch convolutional models
--base class with optimizer and so so that you dont have repeating code
 """
 import math
 from typing import Any
 
 import commentjson as json
 import pytorch_lightning as pl
+from pytorch_lightning.utilities.types import STEP_OUTPUT
 import tinycudann as tcnn
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from pytorch_lightning.utilities.types import LRSchedulerTypeUnion
+from typing import List, Optional, Union, Tuple
 from einops import rearrange
+import rff
+import encoding
+import os
+
+class BaseMLP(pl.LightningModule):
+    """
+    Fully connected network, base classe for other models
+    """
+
+    def __init__(
+        self,
+        dim_in: int,
+        dim_out: int = 1,
+        dim_hidden: int = 128,
+        n_layers: int = 8,
+        activation: torch.nn = nn.ReLU,
+        criterion: F = F.mse_loss,
+        lr: float = 1e-4,
+    ) -> None:
+        super().__init__()
+        self.dim_in = dim_in
+        self.dim_hidden = dim_hidden
+        self.dim_out = dim_out
+        self.n_layers = n_layers
+        self.activation = activation
+        self.criterion = criterion
+        self.lr = lr
+
+        layers = []
+        for i in range(n_layers):
+            layers.append(
+                nn.Linear(
+                    in_features=dim_in if i == 0 else dim_hidden,
+                    out_features=dim_out if i == (n_layers - 1) else dim_hidden,
+                )
+            )
+            layers.append(activation())
+
+        self.layers = torch.nn.Sequential(*layers)
+
+    def forward(self, x) -> Any:
+        return self(x)
+
+    def training_step(self, batch, batch_idx) -> torch.FloatTensor:
+        x, y = batch
+        y_pred = self.forward(x)
+        loss = self.criterion(y, y_pred)
+        self.log("train_loss", loss)
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        return optimizer
+
+    def predict_step(self, batch, batch_idx):
+        x, y = batch
+        return self(x)
+    
+    def lr_schedulers(self) -> LRSchedulerTypeUnion | List[LRSchedulerTypeUnion] | None:
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer=self.optimizer, T_max=10, verbose=True
+        )
+        return self.scheduler
+
+    # def on_train_end(self) -> None:
+    #     writer = SummaryWriter(log_dir=self.logger.log_dir)
+    #     writer.add_text(text_string=str(config), tag="configuration")
+    #     writer.close()
+
+    def set_parameters(self, theta):
+        """
+        Manually set parameters using matching theta, not foolproof. Used for meta learning
+        """
+        p_dict = self.state_dict()
+        for p, thet in zip(p_dict, theta):
+            p_dict[p] = thet.data
+        self.load_state_dict(p_dict)
+        self.eval()
+        self.train()
 
 
 # utils for siren
@@ -36,20 +113,20 @@ class Sine(nn.Module):
         return torch.sin(self.w0 * x)
 
 
-class Siren(nn.Module):
+class SirenLayer(nn.Module):
     """
     Siren layer
     """
 
     def __init__(
         self,
-        dim_in,
-        dim_out,
-        w0=30.0,
-        sigma=6.0,
-        is_first=False,
-        use_bias=True,
-        activation=None,
+        dim_in: int,
+        dim_out: int = 1,
+        w0: float = 30.0,
+        sigma: float = 6.0,
+        is_first: bool = False,
+        use_bias: bool = True,
+        activation: nn = None,
     ):
         super().__init__()
         self.dim_in = dim_in
@@ -78,8 +155,8 @@ class Siren(nn.Module):
         return out
 
 
-# siren network
-class SirenNet(pl.LightningModule):
+
+class SirenNet(BaseMLP):
     """
     PURPOSE:
         Implicit representation of arbitrary functions. Mainly used for 2D, 3D image interpolation
@@ -96,11 +173,6 @@ class SirenNet(pl.LightningModule):
         layers: layers of the model, minus last layer
         last_layer: final layer of model
         losses: list of losses during training
-    METHODS:
-        forward: forward pass
-        training step: forward pass + backprop
-        predict step: used for inference
-        configure_optimizer: optimizer linked to model
     """
 
     def __init__(
@@ -109,14 +181,12 @@ class SirenNet(pl.LightningModule):
         dim_hidden: int = 64,
         dim_out: int = 1,
         num_layers: int = 4,
-        w0=30.0,
-        w0_initial=30.0,
-        sigma=6.0,
-        use_bias=True,
-        final_activation=None,
-        lr=1e-4,
-        *args,
-        **kwargs
+        w0: float = 30.0,
+        w0_initial: float = 30.0,
+        sigma: float = 6.0,
+        use_bias: bool = True,
+        final_activation: nn = None,
+        lr: float = 1e-4,
     ):
         super().__init__()
         self.num_layers = num_layers
@@ -127,12 +197,14 @@ class SirenNet(pl.LightningModule):
 
         self.layers = nn.ModuleList([])
         for ind in range(num_layers):
-            is_first = ind == 0 #change the initialization scheme if the layer is first
+            is_first = (
+                ind == 0
+            )  # change the initialization scheme if the layer is first
             layer_w0 = w0_initial if is_first else w0
             layer_dim_in = dim_in if is_first else dim_hidden
 
             self.layers.append(
-                Siren(
+                SirenLayer(
                     dim_in=layer_dim_in,
                     dim_out=dim_hidden,
                     w0=layer_w0,
@@ -145,7 +217,7 @@ class SirenNet(pl.LightningModule):
         final_activation = (
             nn.Identity() if not exists(final_activation) else final_activation
         )
-        self.last_layer = Siren(
+        self.last_layer = SirenLayer(
             dim_in=dim_hidden,
             dim_out=dim_out,
             w0=w0,
@@ -154,46 +226,10 @@ class SirenNet(pl.LightningModule):
             activation=final_activation,
         )
 
-    def forward(self, x, mods=None):
-        mods = cast_tuple(mods, self.num_layers)
-
-        for layer, mod in zip(self.layers, mods):
+    def forward(self, x):
+        for layer in self.layers:
             x = layer(x)
-
-            if exists(mod):
-                # x *= rearrange(mod, "b d -> b () d") #From Quentin: "d -> () d" -> "b d ->b () d" allors for several batches (images) to be processed
-                x *= mod
-
         return self.last_layer(x)
-
-    def training_step(self, batch, batch_idx):
-        x, y = batch
-        z = self(x)
-
-        loss = F.mse_loss(z, y)
-        self.losses.append(loss.detach().cpu().numpy())
-
-        self.log("train_loss", loss)
-        return loss
-
-    def predict_step(self, batch, batch_idx):
-        x, y = batch
-        return self(x)
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
-        return optimizer
-
-    def set_parameters(self, theta):
-        """
-        Manually set parameters using matching theta, not foolproof. Used for meta learning
-        """
-        p_dict = self.state_dict()
-        for p, thet in zip(p_dict, theta):
-            p_dict[p] = thet.data
-        self.load_state_dict(p_dict)
-        self.eval()
-        self.train()  # supposed to be important when you set parameters or load state
 
 
 class Modulator(nn.Module):
@@ -223,88 +259,139 @@ class Modulator(nn.Module):
         return tuple(hiddens)
 
 
-# siren network
-class FourierNet(pl.LightningModule):
+class ModulatedSirenNet(SirenNet):
     """
-    First layer sin combined with MLP ReLU. Does not work
+    Lightning module for modulated siren. Each layer of the modulation is element-wise multiplied with the corresponding siren layer
     """
 
     def __init__(
         self,
-        dim_in=3,
-        dim_hidden=64,
-        dim_out=1,
-        num_layers=4,
-        w0_initial=30.0,
-        use_bias=True,
-        final_activation=None,
+        dim_in: int = 3,
+        dim_hidden: int = 64,
+        dim_out: int = 1,
+        num_layers: int = 4,
+        w0: float = 30.0,
+        w0_initial: float = 30.0,
+        sigma: float = 6.0,
+        use_bias: bool = True,
+        final_activation: nn = None,
+        lr: float = 1e-4,
     ):
         super().__init__()
-        self.num_layers = num_layers
+        self.dim_in = dim_in
         self.dim_hidden = dim_hidden
+        self.dim_out = dim_out
+        self.num_layers = num_layers
+        self.w0 = w0
+        self.w0_initial = w0_initial
+        self.sigma = sigma
+        self.use_bias = use_bias
+        self.final_activation = final_activation
+        self.lr = lr
         self.losses = []
 
-        self.layers = nn.ModuleList([])
-        ###
-        for ind in range(num_layers):
-            if ind == 0:
-                self.layers.append(
-                    Siren(
-                        dim_in=dim_in,
-                        dim_out=dim_hidden,
-                        w0=w0_initial,
-                        use_bias=use_bias,
-                        is_first=ind,
-                    )
-                )
-            else:
-                self.layers.append(
-                    nn.Linear(in_features=dim_hidden, out_features=dim_hidden)
-                )
-                self.layers.append(nn.Tanh())
-
-        final_activation = (
-            nn.Identity() if not exists(final_activation) else final_activation
+        # networks
+        self.modulator = Modulator(
+            dim_in=self.dim_in, dim_hidden=self.dim_hidden, num_layers=self.num_layers
         )
-        self.last_layer = nn.Linear(in_features=dim_hidden, out_features=dim_out)
+        self.siren = SirenNet(
+            dim_in=self.dim_in,
+            dim_hidden=self.dim_hidden,
+            dim_out=self.dim_out,
+            num_layers=self.num_layers,
+            w0=self.w0,
+            w0_initial=self.w0_initial,
+            sigma=self.sigma,
+            use_bias=self.use_bias,
+            final_activation=self.final_activation,
+            lr=self.lr,
+        )
 
     def forward(self, x):
-        for layer in self.layers:
+        mods = self.modulator(x)
+
+        mods = cast_tuple(mods, self.num_layers)
+
+        for layer, mod in zip(self.siren.layers, mods):
+
             x = layer(x)
 
-        return self.last_layer(x)
+            x *= mod
 
-    def training_step(self, batch, batch_idx):
-        x, y = batch
-        z = self(x)
+        return self.siren.last_layer(x)
+    
 
-        loss = F.mse_loss(z, y)
-        self.losses.append(loss.detach().cpu().numpy())
+class HashSirenNet(SirenNet):
+    """
+    Lightning module for modulated siren where the latent encoding fed to the modulator is done via HashEncoding. 
+    Each layer of the modulation is element-wise multiplied with the corresponding siren layer
+    """
 
-        self.log("train_loss", loss)
-        return loss
+    def __init__(
+        self,
+        config,
+        dim_in: int = 3,
+        dim_hidden: int = 64,
+        dim_out: int = 1,
+        num_layers: int = 4,
+        w0: float = 30.0,
+        w0_initial: float = 30.0,
+        sigma: float = 6.0,
+        use_bias: bool = True,
+        final_activation: nn = None,
+        lr: float = 1e-4,
+    ):
+        super().__init__()
+        self.dim_in = dim_in
+        self.dim_hidden = dim_hidden
+        self.dim_out = dim_out
+        self.num_layers = num_layers
+        self.w0 = w0
+        self.w0_initial = w0_initial
+        self.sigma = sigma
+        self.use_bias = use_bias
+        self.final_activation = final_activation
+        self.lr = lr
+        self.losses = []
 
-    def predict_step(self, batch, batch_idx):
-        x, y = batch
-        return self(x)
+        # networks
+        self.encoding = tcnn.Encoding(
+            n_input_dims=self.dim_in,
+            encoding_config=config["encoding"],
+            dtype=torch.float32,
+        )
+        self.modulator = Modulator(
+            dim_in=self.config["encoding"]["n_levels"]
+            * self.config["encoding"]["n_features_per_level"],
+            dim_hidden=self.dim_hidden,
+            num_layers=self.num_layers,
+        )
+        self.siren = SirenNet(
+            dim_in=self.dim_in,
+            dim_hidden=self.dim_hidden,
+            dim_out=self.dim_out,
+            num_layers=self.num_layers,
+            w0=self.w0,
+            w0_initial=self.w0_initial,
+            use_bias=self.use_bias,
+            final_activation=self.final_activation,
+            lr=self.lr,
+        )
 
-    def configure_optimizers(self):
-        optimizer = (
-            torch.optim.Adam(self.parameters(), lr=self.lr),
-        )  # weight_decay=1e-5)
-        return optimizer
+    def forward(self, x):
+        lat = self.encoding(x)
+        mods = self.modulator(lat)
 
-    def set_parameters(self, theta):
-        """
-        Manually set parameters using matching theta, not foolproof
-        """
-        p_dict = self.state_dict()
-        for p, thet in zip(p_dict, theta):
-            p_dict[p] = thet.data
-        self.load_state_dict(p_dict)
-        self.eval()
-        self.train()  # supposed to be important when you set parameters or load state
+        mods = cast_tuple(mods, self.num_layers)
 
+        for layer, mod in zip(self.siren.layers, mods):
+
+            x = layer(x)
+
+            x *= mod
+
+        return self.siren.last_layer(x)
+    
 
 class PsfSirenNet(SirenNet):
     """
@@ -316,25 +403,22 @@ class PsfSirenNet(SirenNet):
 
     def __init__(
         self,
-        dim_in=3,
-        dim_hidden=64,
-        dim_out=1,
-        num_layers=4,
-        w0=30,
-        w0_initial=30,
-        use_bias=True,
-        final_activation=None,
-        lr=0.0001,
-        coordinates_spacing=None,
-        n_sample=5,
-        *args,
-        **kwargs
+        dim_in: int = 3,
+        dim_hidden: int = 64,
+        dim_out: int = 1,
+        num_layers: int = 4,
+        w0: float = 30.,
+        w0_initial: float = 30.,
+        use_bias: bool = True,
+        final_activation: bool = None,
+        lr: float = 1e-4,
+        coordinates_spacing: float = None,
+        n_sample: int = 5,
     ):
         super().__init__()
 
         self.num_layers = num_layers
         self.dim_hidden = dim_hidden
-        self.losses = []
         self.lr = lr
         self.n_sample = n_sample
 
@@ -345,7 +429,7 @@ class PsfSirenNet(SirenNet):
             layer_dim_in = dim_in if is_first else dim_hidden
 
             self.layers.append(
-                Siren(
+                SirenLayer(
                     dim_in=layer_dim_in,
                     dim_out=dim_hidden,
                     w0=layer_w0,
@@ -357,7 +441,7 @@ class PsfSirenNet(SirenNet):
         final_activation = (
             nn.Identity() if not exists(final_activation) else final_activation
         )
-        self.last_layer = Siren(
+        self.last_layer = SirenLayer(
             dim_in=dim_hidden,
             dim_out=dim_out,
             w0=w0,
@@ -366,7 +450,7 @@ class PsfSirenNet(SirenNet):
         )
         self.coordinates_spacing = (
             coordinates_spacing if not None else ValueError("No PSF spacing defined")
-        )  # fall back to SirenNet?
+        )  
 
         # Build psf coordinates centered around 0
         psf_sx = torch.linspace(
@@ -421,16 +505,11 @@ class PsfSirenNet(SirenNet):
         self.psf_conv = psf_conv
 
     def forward(self, x, mods=None):
-        mods = cast_tuple(
-            mods, self.num_layers
-        )  # +1 to account for the conv layer at the end
 
-        for layer, mod in zip(self.layers, mods):
+
+        for layer in self.layers:
 
             x = layer(x)
-
-            if exists(mod):  # TODO: could be removed for performance
-                x *= rearrange(mod, "d -> () d")
 
         return self.last_layer(x)
 
@@ -457,223 +536,112 @@ class PsfSirenNet(SirenNet):
         self.log("train_loss", loss)
 
         return loss
+    
 
-
-class ModulatedSirenNet(pl.LightningModule):
-    """
-    Lightning module for modulated siren. Each layer of the modulation is element-wise multiplied with the corresponding siren layer
-    """
-
+class RffNet(BaseMLP):
     def __init__(
         self,
-        dim_in=3,
-        dim_hidden=64,
-        dim_out=1,
-        num_layers=4,
-        w0=30.0,
-        w0_initial=30.0,
-        sigma=6.0,
-        use_bias=True,
-        final_activation=None,
-        lr=1e-4,
-        *args,
-        **kwargs
+        dim_in: int,
+        dim_hidden: int = 128,
+        dim_out: int = 1,
+        n_layers: int = 8,
+        n_frequencies: int = 128,
+        sigma: float = 10.0,
+        activation: nn = nn.ReLU,
+        lr: float = 1e-4,
     ):
         super().__init__()
         self.dim_in = dim_in
         self.dim_hidden = dim_hidden
         self.dim_out = dim_out
-        self.num_layers = num_layers
-        self.w0 = w0
-        self.w0_initial = w0_initial
+        self.n_layers = n_layers
+        self.n_frequencies = n_frequencies
         self.sigma = sigma
-        self.use_bias = use_bias
-        self.final_activation = final_activation
+        self.activation = activation
         self.lr = lr
-        self.losses = []
+        layers = []
 
-        # networks
-        self.modulator = Modulator(
-            dim_in=self.dim_in, dim_hidden=self.dim_hidden, num_layers=self.num_layers
+        self.encoder = self.encoder = rff.layers.GaussianEncoding(
+            sigma=sigma, input_size=dim_in, encoded_size=n_frequencies
         )
-        self.siren = SirenNet(
-            dim_in=self.dim_in,
-            dim_hidden=self.dim_hidden,
-            dim_out=self.dim_out,
-            num_layers=self.num_layers,
-            w0=self.w0,
-            w0_initial=self.w0_initial,
-            sigma=self.sigma,
-            use_bias=self.use_bias,
-            final_activation=self.final_activation,
-            lr=self.lr,
-        )
+        encoding_dim_out = n_frequencies * 2
 
-    def forward(self, x):
-        mods = self.modulator(x)
+        for i in range(n_layers):
+            layers.append(
+                nn.Linear(
+                    in_features=encoding_dim_out if i == 0 else dim_hidden,
+                    out_features=dim_out if i == (n_layers - 1) else dim_hidden,
+                )
+            )
+            layers.append(activation())
 
-        mods = cast_tuple(mods, self.num_layers)
-
-        for layer, mod in zip(self.siren.layers, mods):
-
-            x = layer(x)
-
-            x *= mod
-
-        return self.siren.last_layer(x)
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-5)
-        return optimizer
-
-    def training_step(self, batch, batch_idx):
-        x, y = batch
-        z = self(x)
-
-        loss = F.mse_loss(z, y)
-        self.losses.append(loss.detach().cpu().numpy())
-
-        self.log("train_loss", loss)
-        return loss
-
-    def predict_step(self, batch, batch_idx):
-        x, y = batch
-        return self(x)
-
-
-class HashSirenNet(pl.LightningModule):
-    """
-    Lightning module for modulated siren where the latent encoding fed to the modulator is done via HashEncoding. Each layer of the modulation is element-wise multiplied with the corresponding siren layer
-    """
-
-    def __init__(
-        self,
-        dim_in=3,
-        dim_hidden=64,
-        dim_out=1,
-        num_layers=4,
-        w0=30.0,
-        w0_initial=30.0,
-        use_bias=True,
-        final_activation=None,
-        lr=1e-4,
-        config=None,
-        *args,
-        **kwargs
-    ):
-        super().__init__()
-        self.dim_in = dim_in
-        self.dim_hidden = dim_hidden
-        self.dim_out = dim_out
-        self.num_layers = num_layers
-        self.w0 = w0
-        self.w0_initial = w0_initial
-        self.use_bias = use_bias
-        self.final_activation = final_activation
-        self.lr = lr
-        self.config = config
-        self.losses = []
-
-        # networks
-        self.encoding = tcnn.Encoding(
-            n_input_dims=self.dim_in,
-            encoding_config=config["encoding"],
-            dtype=torch.float32,
-        )
-        self.modulator = Modulator(
-            dim_in=self.config["encoding"]["n_levels"]
-            * self.config["encoding"]["n_features_per_level"],
-            dim_hidden=self.dim_hidden,
-            num_layers=self.num_layers,
-        )
-        self.siren = SirenNet(
-            dim_in=self.dim_in,
-            dim_hidden=self.dim_hidden,
-            dim_out=self.dim_out,
-            num_layers=self.num_layers,
-            w0=self.w0,
-            w0_initial=self.w0_initial,
-            use_bias=self.use_bias,
-            final_activation=self.final_activation,
-            lr=self.lr,
-        )
-
-    def forward(self, x):
-        lat = self.encoding(x)
-        mods = self.modulator(lat)
-
-        mods = cast_tuple(mods, self.num_layers)
-
-        for layer, mod in zip(self.siren.layers, mods):
-
-            x = layer(x)
-
-            x *= mod
-
-        return self.siren.last_layer(x)
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-5)
-        return optimizer
-
-    def training_step(self, batch, batch_idx):
-        x, y = batch
-        z = self(x)
-
-        loss = F.mse_loss(z, y)
-        self.losses.append(loss.detach().cpu().numpy())
-
-        self.log("train_loss", loss)
-        return loss
-
-    def predict_step(self, batch, batch_idx):
-        x, y = batch
-        return self(x)
-
-
-class HashMLP(pl.LightningModule):
-    """
-    Lightning module for HashMLP.
-    """
-
-    def __init__(self, dim_in, dim_out, config, lr, *args, **kwargs):
-        super().__init__()
-        self.config = config
-        self.dim_in = dim_in
-        self.dim_out = dim_out
-        self.lr = lr
-        self.losses = []
-        self.latents = []
-
-        self.encoder = tcnn.Encoding(
-            n_input_dims=dim_in, encoding_config=config["encoding"]
-        )
-        self.decoder = tcnn.Network(
-            n_input_dims=self.encoder.n_output_dims,
-            n_output_dims=dim_out,
-            network_config=config["network"],
-        )
-        # self.model = torch.nn.Sequential(self.encoder, self.decoder)
+        self.decoder = nn.Sequential(*layers)
 
     def forward(self, x):
         z = self.encoder(x)
         y_pred = self.decoder(z)
         return y_pred
+    
 
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)  # weight_decay=1e-5
-        return optimizer
-
-    def training_step(self, batch, batch_idx):
-        x, y = batch
+class TcnnHashMLP(BaseMLP):
+    """
+    Model using original tinycudann library
+    """    
+    def __init__(self, 
+                 dim_in: int, 
+                 n_levels: int, 
+                 n_features_per_level: int,
+                 log2_hashmap_size: int,
+                 base_resolution: int,
+                 per_level_scale: float,
+                 interplation_method: str = 'linear', 
+                 dim_hidden:int = 64, 
+                 dim_out: int = 1,
+                 lr: float = 1e-4):
+        super().__init__()
+        self.dim_in = dim_in
+        self.n_levels = n_levels
+        self.n_features_per_level = n_features_per_level
+        self.log2_hashmap_size = log2_hashmap_size
+        self.base_resolution = base_resolution
+        self.per_level_scale = per_level_scale
+        self.interpolation_method = interplation_method
+        self.dim_hidden = dim_hidden
+        self.dim_out = dim_out
+        self.lr = lr
+        self.latents = [] #used for encoding representation visualisation
+        
+        self.encoder = tcnn.Encoding(
+            n_input_dims=(self.dim_in),
+            encoding_config={
+                "otype": "HashGrid",
+                "n_levels": self.n_levels,
+                "n_features_per_level": self.n_features_per_level,
+                "log2_hashmap_size": self.log2_hashmap_size,
+                "base_resolution": self.base_resolution,
+                "per_level_scale": self.per_level_scale,
+                "interpolation": self.interpolation_method,
+            },
+            dtype=torch.float32,
+        )
+        
+        self.decoder = tcnn.Network(
+            n_input_dims=self.encoder.n_output_dims,
+            n_output_dims=dim_out,
+            network_config={
+                "otype": "FullyFusedMLP", 
+                "activation": "ReLU",
+                "output_activation": "None",
+                "n_neurons": self.dim_hidden,
+                "n_hidden_layers": self.n_layers
+                },
+        )
+        
+        
+    def forward(self, x):
         z = self.encoder(x)
         y_pred = self.decoder(z)
-
-        loss = F.mse_loss(y_pred, y)
-        self.losses.append(loss.detach().cpu().numpy())
-
-        self.log("train_loss", loss)
-        return loss
+        return y_pred
 
     def predict_step(self, batch, batch_idx):
         x, y = batch
@@ -684,7 +652,106 @@ class HashMLP(pl.LightningModule):
 
     def get_latents(self):
         return self.latents
+    
 
+class HashMLP(BaseMLP):
+    """
+    Model using original encoding for hash grids
+    """  
+    def __init__(self, 
+                 dim_in: int, 
+                 n_levels: int, 
+                 n_features_per_level: int,
+                 log2_hashmap_size: int,
+                 base_resolution: Tuple[int, ...],
+                 finest_resolution: Tuple[int, ...],
+                 interplation_method: str = 'linear', 
+                 dim_hidden:int = 64, 
+                 dim_out: int = 1,
+                 activation: nn = nn.GELU, 
+                 dropout: float = 0.0,
+                 lr: float = 1e-4,
+                 *args,
+                 **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dim_in = dim_in
+        self.n_levels = n_levels
+        self.n_features_per_level = n_features_per_level
+        self.log2_hashmap_size = log2_hashmap_size
+        self.base_resolution = base_resolution
+        self.finest_resolution = finest_resolution
+        self.interpolation_method = interplation_method
+        self.dim_hidden = dim_hidden
+        self.dim_out = dim_out
+        self.dropout = dropout
+        self.lr = lr
+        self.latents = [] #used for encoding representation visualisation
+         
+        if isinstance(self.base_resolution, int):
+                self.encoder = encoding.MultiResHashGrid(
+                    dim=self.dim_in,
+                    n_levels=self.n_levels,
+                    n_features_per_level=self.n_features_per_level,
+                    log2_hashmap_size=self.log2_hashmap_size,
+                    base_resolution=self.base_resolution,
+                    finest_resolution=self.finest_resolution,
+                )
+        else:
+            self.encoder = encoding.MultiResHashGridV2(
+                dim=self.dim_in,
+                n_levels=self.n_levels,
+                n_features_per_level=self.n_features_per_level,
+                log2_hashmap_size=self.log2_hashmap_size,
+                base_resolution=self.base_resolution,
+                finest_resolution=self.finest_resolution,
+            )
+
+        self.encoding_dim_out = self.n_levels * self.n_features_per_level
+
+        self.decoder = torch.nn.ModuleList()
+        for i in range(self.n_layers):
+            if i == 0:
+                in_features = self.encoding_dim_out
+            else:
+                in_features = self.dim_hidden
+            block = torch.nn.Sequential(
+                # torch.nn.utils.parametrizations.spectral_norm(
+                #     torch.nn.Linear(
+                #         in_features=in_features,
+                #         out_features=self.dim_out
+                #         if i == (self.n_layers - 1)
+                #         else self.dim_hidden,
+                #     ),
+                #     n_power_iterations=4,
+                #     eps=1e-12,
+                #     dim=None,
+                # ),
+                torch.nn.Linear(in_features=in_features, out_features=self.dim_out if i == (self.n_layers - 1) else self.dim_hidden),
+                torch.nn.BatchNorm1d(
+                    num_features=self.dim_out
+                    if i == (self.n_layers - 1)
+                    else self.dim_hidden
+                ),
+                activation(),
+                torch.nn.Dropout(p=dropout, inplace=False),
+            )
+            self.decoder.append(block)
+         
+    def forward(self, x):
+        z = self.encoder(x)
+        y_pred = self.decoder(z)
+        return y_pred
+
+    def predict_step(self, batch, batch_idx):
+        x, y = batch
+        z = self.encoder(x)
+        self.latents.append(z)
+        y_pred = self.decoder(z)
+        return y_pred
+
+    def get_latents(self):
+        return self.latents
+    
 
 class MultiHashMLP(pl.LightningModule):
     """
@@ -826,3 +893,29 @@ class MultiSiren(pl.LightningModule):
         z = self.encoders[frame_idx](x)  # pred, model(x)
         y_pred = self.decoder(z)
         return y_pred
+
+# #######
+# #TESTS#
+# #######
+
+# data = torch.randn(16, 16, 16)
+
+# Y = torch.FloatTensor(data).reshape(-1, 1)
+# Y = Y / Y.max()
+
+# axes = []
+# for s in data.shape:
+#     axes.append(torch.linspace(0, 1, s))
+
+# mgrid = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1)
+
+# coords = torch.FloatTensor(mgrid)
+
+# X = coords.reshape(len(Y), len(data))
+
+# dataset = torch.utils.data.TensorDataset(X, Y)
+
+# train_loader = torch.utils.data.DataLoader(
+#     dataset, batch_size=10000, shuffle=True, num_workers=os.cpu_count()
+# )
+
