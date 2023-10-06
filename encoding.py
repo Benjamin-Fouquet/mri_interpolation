@@ -335,26 +335,3 @@ class MultiResHashGridV2(pl.LightningModule):
     def forward(self, x: torch.Tensor):
         return torch.cat([level(x) for level in self.levels], dim=-1)
 
-
-encoder1 = MultiResHashGrid(
-    dim=2,
-    n_levels=4,
-    n_features_per_level=2,
-    log2_hashmap_size=19,
-    base_resolution=16,
-    finest_resolution=512,
-)
-
-encoder2 = MultiResHashGridV2(
-    dim=5,
-    n_levels=1,
-    n_features_per_level=1,
-    log2_hashmap_size=19,
-    base_resolution=(16, 16, 16, 4, 4),
-    finest_resolution=(512, 512, 512, 512, 512),
-)
-
-encoder1(torch.randn(10, 2))
-encoder2(torch.ones(1, 5))
-
-mgrid = create_mgrid(shape=(3, 3, 3))
