@@ -25,8 +25,7 @@ from torchsummary import summary
 
 from config import base
 from datamodules import MriDataModule
-from models import (HashMLP, HashSirenNet, ModulatedSirenNet, MultiSiren,
-                    PsfSirenNet, SirenNet)
+import models
 
 torch.manual_seed(1337)
 
@@ -83,13 +82,11 @@ for key in args.__dict__:
 
 # correct for model class #could use getattr() here
 if args.model_class is not None:
-    if args.model_class == "PsfSirenNet":
-        config.model_cls = PsfSirenNet
-    elif args.model_class == "SirenNet":
-        config.model_cls = SirenNet
-    else:
-        print("model class not recognized")
-        raise ValueError
+    try:
+        config.model_cls = getattr(models, args.model_class)
+    except:
+        print('model class not recognized, exiting')  
+        sys.exit()  
 
 training_start = time.time()
 ####################
@@ -144,7 +141,7 @@ test_loader = datamodule.test_dataloader()
 ###############
 
 trainer = pl.Trainer(
-    gpus=config.device,
+    accelerator='gpu' if torch.cuda.is_available else 'cpu',
     max_epochs=config.epochs,
     accumulate_grad_batches=dict(config.accumulate_grad_batches)
     if config.accumulate_grad_batches
@@ -152,7 +149,6 @@ trainer = pl.Trainer(
     precision=16,
     # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
 )
-# trainer = pl.Trainer(gpus=config.device, max_epochs=config.epochs)
 trainer.fit(model, train_loader)
 
 training_stop = time.time()
