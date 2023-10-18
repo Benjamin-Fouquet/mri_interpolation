@@ -29,6 +29,8 @@ import models
 
 torch.manual_seed(1337)
 
+args = None
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", help="batch size", type=int, required=False)
@@ -66,61 +68,77 @@ def export_to_txt(dict: dict, file_path: str = "") -> None:
             f.write(str(key) + " : " + str(dict[key]) + "\n")
 
 
+config = base.HashConfig()
+
 with open("config/hash_config.json") as f:
-    enco_config = json.load(f)
-
-if args.enco_config_path:
-    with open(args.enco_config_path) as f:
-        enco_config = json.load(f)
-
-config = base.BaseConfig()
+    config.enco_config = json.load(f)
 
 # parsed argument -> config
-for key in args.__dict__:
-    if args.__dict__[key] is not None:
-        config.__dict__[key] = args.__dict__[key]
+if args is not None:
+    for key in args.__dict__:
+        if args.__dict__[key] is not None:
+            config.__dict__[key] = args.__dict__[key]
 
-# correct for model class #could use getattr() here
-if args.model_class is not None:
-    try:
-        config.model_cls = getattr(models, args.model_class)
-    except:
-        print('model class not recognized, exiting')  
-        sys.exit()  
+# # correct for model class #could use getattr() here
+# if args.model_class is not None:
+#     try:
+#         config.model_cls = getattr(models, args.model_class)
+#     except:
+#         print('model class not recognized, exiting')  
+#         sys.exit()  
 
 training_start = time.time()
 ####################
 # MODEL DECLARATION#
 ####################
+
+#Not all arguments are used for all models, ideally the next implementation would make use of specialized library (hydra) or create a class to decompose the config and feed it to the model class
+
 if config.checkpoint_path:
     model = config.model_cls.load_from_checkpoint(
         config.checkpoint_path,
         dim_in=config.dim_in,
         dim_hidden=config.dim_hidden,
         dim_out=config.dim_out,
-        num_layers=config.num_layers,
+        n_layers=config.n_layers,
+        encoder_type=config.encoder_type,
+        n_levels=config.n_levels,
+        n_features_per_level=config.n_features_per_level,
+        log2_hashmap_size=config.log2_hashmap_size,
+        base_resolution=config.base_resolution,
+        finest_resolution=config.finest_resolution,
+        per_level_scale=config.per_level_scale,
+        interpolation=config.interpolation,
         w0=config.w0,
         w0_initial=config.w0_initial,
         use_bias=config.use_bias,
         final_activation=config.final_activation,
         lr=config.lr,
-        config=enco_config,
+        config=config.enco_config,
         n_frames=config.n_frames,
     )
-
+    
 else:
 
     model = config.model_cls(
         dim_in=config.dim_in,
         dim_hidden=config.dim_hidden,
         dim_out=config.dim_out,
-        num_layers=config.num_layers,
+        n_layers=config.n_layers,
+        encoder_type=config.encoder_type,
+        n_levels=config.n_levels,
+        n_features_per_level=config.n_features_per_level,
+        log2_hashmap_size=config.log2_hashmap_size,
+        base_resolution=config.base_resolution,
+        finest_resolution=config.finest_resolution,
+        per_level_scale=config.per_level_scale,
+        interpolation=config.interpolation,
         w0=config.w0,
         w0_initial=config.w0_initial,
         use_bias=config.use_bias,
         final_activation=config.final_activation,
         lr=config.lr,
-        config=enco_config,
+        config=config.enco_config,
         n_frames=config.n_frames,
     )
 
@@ -133,12 +151,11 @@ datamodule.prepare_data()
 datamodule.setup()
 
 train_loader = datamodule.train_dataloader()
-# mean_train_loader = datamodule.mean_dataloader()
 test_loader = datamodule.test_dataloader()
 
-###############
+################
 # TRAINING LOOP#
-###############
+################
 
 trainer = pl.Trainer(
     accelerator='gpu' if torch.cuda.is_available else 'cpu',
@@ -146,184 +163,71 @@ trainer = pl.Trainer(
     accumulate_grad_batches=dict(config.accumulate_grad_batches)
     if config.accumulate_grad_batches
     else None,
-    precision=16,
+    precision=32,
     # callbacks=[pl.callbacks.StochasticWeightAveraging(swa_lrs=1e-2)]
 )
 trainer.fit(model, train_loader)
 
 training_stop = time.time()
 
-filepath = model.logger.log_dir + "/"
+#######################
+#PREDICTION AND OUTPUT#
+#######################
 
-image = nib.load(config.image_path)
-data = image.get_fdata()
-if config.dim_in == 2:
-    data = data[:, :, int(data.shape[2] / 2)]
+filepath = model.logger.log_dir + '\\'
+# filepath = model.logger.log_dir + '/'
+
+config.log = str(model.logger.version)
+
+# create a prediction
 pred = torch.concat(trainer.predict(model, test_loader))
 
-if config.dim_in == 3:
-    output = pred.cpu().detach().numpy().reshape(data.shape)
-    if output.dtype == "float16":
-        output = np.array(output, dtype=np.float32)
-    nib.save(
-        nib.Nifti1Image(output, affine=image.affine), filepath + "2_16_0_result.nii.gz"
+# im = pred.reshape(config.image_shape)
+im = pred.reshape(config.image_shape)
+im = im.detach().cpu().numpy()
+im = np.array(im, dtype=np.float32)
+if len(im.shape) == 2:
+    plt.imshow(im.T)
+    plt.savefig(filepath + "pred.png")
+else:
+    nib.save(nib.Nifti1Image(im, affine=np.eye(4)), filepath + "pred.nii.gz")
+
+for shape in config.interp_shapes:
+    # dense grid
+    Y_interp = torch.zeros((np.prod(shape), 1))
+
+    axes = []
+    for s in config.interp_shape:
+        axes.append(torch.linspace(0, 1, s))
+
+    mgrid = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1)
+
+    coords = torch.FloatTensor(mgrid)
+    X_interp = coords.reshape(len(Y_interp), config.dim_in)
+
+    interp_dataset = torch.utils.data.TensorDataset(X_interp, Y_interp)
+    interp_loader = torch.utils.data.DataLoader(
+        interp_dataset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=config.num_workers,
     )
 
-if config.dim_in == 3:
-    output = pred.cpu().detach().numpy().reshape(data.shape)
-    if output.dtype == "float16":
-        output = np.array(output, dtype=np.float32)
-    nib.save(
-        nib.Nifti1Image(output, affine=image.affine),
-        filepath + "training_result.nii.gz",
-    )
-if config.dim_in == 4:
-    output = np.zeros(config.image_shape)
-    pred = pred.numpy()
-    pred = np.array(pred, dtype=np.float32)
-    for i in range(config.n_frames):
-        im = pred[
-            np.prod(config.image_shape[0:3])
-            * i : np.prod(config.image_shape[0:3])
-            * (i + 1),
-            :,
-        ]
-        im = im.reshape(config.image_shape[0:3])
-        output[..., i] = im
-    nib.save(
-        nib.Nifti1Image(output, affine=image.affine),
-        filepath + "training_result.nii.gz",
-    )
+    # create an interpolation
+    interp = torch.concat(trainer.predict(model, interp_loader))
 
-if config.dim_in == 2:
-    output = pred.cpu().detach().numpy().reshape((data.shape[0], data.shape[1]))
-    fig, axes = plt.subplots(1, 2)
-    diff = data - output
-    axes[0].imshow(output)
-    axes[1].imshow(data)
-    fig.suptitle("Standard training")
-    axes[0].set_title("Prediction")
-    axes[1].set_title("Ground truth")
-    plt.savefig(filepath + "training_result_standard.png")
-    plt.clf()
+    interp_im = interp.reshape(shape)
 
-    plt.imshow(diff)
-    plt.savefig(filepath + "difference.png")
+    interp_im = interp_im.detach().cpu().numpy()
+    interp_im = np.array(interp_im, dtype=np.float32)
+    nib.save(
+        nib.Nifti1Image(interp_im, affine=np.eye(4)),
+        filepath + f"interpolation{shape}.nii.gz",
+    )
 
 config.export_to_txt(file_path=filepath)
-export_to_txt(enco_config, file_path=filepath)
-
-ground_truth = (data / np.max(data)) * 2 - 1
-
-# try:
-#     lats = model.get_latents()
-#     for idx, lat in enumerate(lats):
-#         torch.save(lat, filepath + f'lat{idx}.pt')
-#     print('latents extracted')
-# except:
-#     print('No latents available')
-
-# lats = lats[0]
-
-# os.mkdir(filepath + 'latents/')
-
-# create simple visualisation for latents, only usable with HashMLP
-# for i in range(lats.shape[-1]):
-#     lat = lats[:,i].detach().cpu().numpy()
-#     lat = lat.reshape((config.image_shape))
-#     lat = np.array(lat, dtype=np.float32)
-#     # plt.imshow(lat[:,:,config.image_shape[-1] // 2])
-#     plt.imshow(lat[0,:,:])
-#     plt.savefig(filepath + f'latents/latent{i}.png')
 
 
-# space upscaling
-up_shape = (1408, 1408, 6)
-loader = datamodule.upsampling(batch_size=100000, shape=up_shape)
-upsample = torch.concat(trainer.predict(model, loader))
-upsample = upsample.cpu().detach().numpy().reshape(up_shape)
-if upsample.dtype == "float16":
-    upsample = np.array(upsample, dtype=np.float32)
-nib.save(
-    nib.Nifti1Image(upsample, affine=np.eye(4)), filepath + "upsample_space.nii.gz"
-)
 
 
-# compare with normal interpolation
-gt = nib.load(config.image_path)
-up_affine = gt.affine[:, :].copy()
-up_affine[0, 0:2] /= 4
-up_affine[1, 0:2] /= 4
-up_affine[2, 0:2] /= 4
 
-up = proc.resample_from_to(gt, (up_shape, up_affine))
-nib.save(
-    up,
-    "/home/aorus-users/Benjamin/git_repos/mri_interpolation/lightning_logs/version_23/"
-    + "upsample_spline.nii.gz",
-)
-
-# #temporal upscaling
-# up_shape = (352, 352, 6, 60)
-# loader = datamodule.upsampling(batch_size=100000, shape=up_shape)
-# upsample = torch.concat(trainer.predict(model, loader))
-# upsample = upsample.cpu().detach().numpy().reshape(up_shape)
-# if upsample.dtype == 'float16':
-#     upsample = np.array(upsample, dtype=np.float32)
-# nib.save(nib.Nifti1Image(upsample, affine=np.eye(4)), filepath + "upsample_time.nii.gz")
-
-# # metrics
-# with open(filepath + "scores.txt", "w") as f:
-#     f.write("MSE : " + str(metrics.mean_squared_error(ground_truth, output)) + "\n")
-#     f.write("PSNR : " + str(metrics.peak_signal_noise_ratio(ground_truth, output)) + "\n")
-#     # if config.dim_in < 4:
-#     #     f.write("SSMI : " + str(metrics.structural_similarity(ground_truth, output)) + "\n")
-#     f.write(
-#         "training time  : " + str(training_stop - training_start) + " seconds" + "\n"
-#     )
-#     f.write(
-#         "Number of trainable parameters : "
-#         + str(sum(p.numel() for p in model.parameters() if p.requires_grad))
-#         + "\n"
-#     )  # remove condition if you want total parameters
-#     f.write("Max memory allocated : " + str(torch.cuda.max_memory_allocated()) + "\n")
-
-# difference between gt and pred as an image
-nib.save(
-    nib.Nifti1Image((ground_truth - output), affine=image.affine),
-    filepath + "difference.nii.gz",
-)
-
-
-def export_to_txt(dict, file_path: str = "") -> None:
-    with open(file_path + "config.txt", "a+") as f:
-        for key in dict:
-            f.write(str(key) + " : " + str(dict[key]) + "\n")
-
-
-export_to_txt(enco_config, filepath)
-
-# def latents_to_fig(lats):
-#     fig, axes = plt.subplots(4, 4)
-#     for i in range(4):
-#         for j in range(4):
-#             image = lats[0][:, i+j].detach().cpu().numpy().reshape(74, 74, 52)
-#             axes[i, j].imshow(image[:,:,26], cmap='gray')
-#     plt.savefig(filepath + 'latents_vis.png')
-
-# latents_to_fig(lats)
-
-# x = torch.linspace(0, 1, 290)
-# y = torch.linspace(0, 1, 290)
-# z = torch.linspace(0, 1, 10)
-
-# mgrid = torch.stack(torch.meshgrid((x, y, z), indexing='ij'), dim=-1)
-
-# X = mgrid.reshape(-1, 3)
-
-# for i in range(10):
-#     with torch.no_grad():
-#         z = model.encoders[i](X.to('cuda'))
-#         y_pred = model.decoder(z)
-#         image = np.array(y_pred.detach().cpu().numpy(), dtype=np.float32).reshape(290, 290, 10)
-#         nib.save(nib.Nifti1Image(image, affine=np.eye(4)), filepath + f'slice{i}.nii.gz')
