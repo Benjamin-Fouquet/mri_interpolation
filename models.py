@@ -7,7 +7,7 @@ from typing import Any
 import commentjson as json
 import pytorch_lightning as pl
 from pytorch_lightning.utilities.types import STEP_OUTPUT
-import tinycudann as tcnn
+# import tinycudann as tcnn
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -25,13 +25,15 @@ class BaseMLP(pl.LightningModule):
 
     def __init__(
         self,
-        dim_in: int,
+        dim_in: int = 2,
         dim_out: int = 1,
         dim_hidden: int = 128,
         n_layers: int = 8,
         activation: torch.nn = nn.ReLU,
         criterion: F = F.mse_loss,
         lr: float = 1e-4,
+        *args,
+        **kwargs,
     ) -> None:
         super().__init__()
         self.dim_in = dim_in
@@ -164,7 +166,7 @@ class SirenNet(BaseMLP):
         dim_in: dimension of input
         dim_hidden: dimmension of hidden layers. 128-256 are recommended values
         dim_out: dimension of output
-        num_layers: number of layers
+        n_layers: number of layers
         w0: multiplying factor so that f(x) = sin(w0 * x) between layers. Recommended value, 30.0
         w0_initial: see w0, recommended value 30.0 as per paper (See paper 'Implicit Neural Representations with Periodic Activation Functions' sec. 3.2, final paragraph, and supplement Sec. 1.5 for discussion of factor 30)
         use_bias: if bias is used between layers, usually set to True
@@ -180,7 +182,7 @@ class SirenNet(BaseMLP):
         dim_in: int = 3,
         dim_hidden: int = 64,
         dim_out: int = 1,
-        num_layers: int = 4,
+        n_layers: int = 4,
         w0: float = 30.0,
         w0_initial: float = 30.0,
         sigma: float = 6.0,
@@ -189,14 +191,14 @@ class SirenNet(BaseMLP):
         lr: float = 1e-4,
     ):
         super().__init__()
-        self.num_layers = num_layers
+        self.n_layers = n_layers
         self.dim_hidden = dim_hidden
         self.sigma = sigma
         self.losses = []
         self.lr = lr
 
         self.layers = nn.ModuleList([])
-        for ind in range(num_layers):
+        for ind in range(n_layers):
             is_first = (
                 ind == 0
             )  # change the initialization scheme if the layer is first
@@ -237,11 +239,11 @@ class Modulator(nn.Module):
     Modulator as per paper 'Modulated periodic activations for generalizable local functional representations'
     """
 
-    def __init__(self, dim_in, dim_hidden, num_layers):
+    def __init__(self, dim_in, dim_hidden, n_layers):
         super().__init__()
         self.layers = nn.ModuleList([])
 
-        for ind in range(num_layers):
+        for ind in range(n_layers):
             is_first = ind == 0
             dim = dim_in if is_first else (dim_hidden + dim_in)
 
@@ -269,7 +271,7 @@ class ModulatedSirenNet(SirenNet):
         dim_in: int = 3,
         dim_hidden: int = 64,
         dim_out: int = 1,
-        num_layers: int = 4,
+        n_layers: int = 4,
         w0: float = 30.0,
         w0_initial: float = 30.0,
         sigma: float = 6.0,
@@ -281,7 +283,7 @@ class ModulatedSirenNet(SirenNet):
         self.dim_in = dim_in
         self.dim_hidden = dim_hidden
         self.dim_out = dim_out
-        self.num_layers = num_layers
+        self.n_layers = n_layers
         self.w0 = w0
         self.w0_initial = w0_initial
         self.sigma = sigma
@@ -292,13 +294,13 @@ class ModulatedSirenNet(SirenNet):
 
         # networks
         self.modulator = Modulator(
-            dim_in=self.dim_in, dim_hidden=self.dim_hidden, num_layers=self.num_layers
+            dim_in=self.dim_in, dim_hidden=self.dim_hidden, n_layers=self.n_layers
         )
         self.siren = SirenNet(
             dim_in=self.dim_in,
             dim_hidden=self.dim_hidden,
             dim_out=self.dim_out,
-            num_layers=self.num_layers,
+            n_layers=self.n_layers,
             w0=self.w0,
             w0_initial=self.w0_initial,
             sigma=self.sigma,
@@ -310,7 +312,7 @@ class ModulatedSirenNet(SirenNet):
     def forward(self, x):
         mods = self.modulator(x)
 
-        mods = cast_tuple(mods, self.num_layers)
+        mods = cast_tuple(mods, self.n_layers)
 
         for layer, mod in zip(self.siren.layers, mods):
 
@@ -333,7 +335,7 @@ class HashSirenNet(SirenNet):
         dim_in: int = 3,
         dim_hidden: int = 64,
         dim_out: int = 1,
-        num_layers: int = 4,
+        n_layers: int = 4,
         w0: float = 30.0,
         w0_initial: float = 30.0,
         sigma: float = 6.0,
@@ -345,7 +347,7 @@ class HashSirenNet(SirenNet):
         self.dim_in = dim_in
         self.dim_hidden = dim_hidden
         self.dim_out = dim_out
-        self.num_layers = num_layers
+        self.n_layers = n_layers
         self.w0 = w0
         self.w0_initial = w0_initial
         self.sigma = sigma
@@ -364,13 +366,13 @@ class HashSirenNet(SirenNet):
             dim_in=self.config["encoding"]["n_levels"]
             * self.config["encoding"]["n_features_per_level"],
             dim_hidden=self.dim_hidden,
-            num_layers=self.num_layers,
+            n_layers=self.n_layers,
         )
         self.siren = SirenNet(
             dim_in=self.dim_in,
             dim_hidden=self.dim_hidden,
             dim_out=self.dim_out,
-            num_layers=self.num_layers,
+            n_layers=self.n_layers,
             w0=self.w0,
             w0_initial=self.w0_initial,
             use_bias=self.use_bias,
@@ -382,7 +384,7 @@ class HashSirenNet(SirenNet):
         lat = self.encoding(x)
         mods = self.modulator(lat)
 
-        mods = cast_tuple(mods, self.num_layers)
+        mods = cast_tuple(mods, self.n_layers)
 
         for layer, mod in zip(self.siren.layers, mods):
 
@@ -406,7 +408,7 @@ class PsfSirenNet(SirenNet):
         dim_in: int = 3,
         dim_hidden: int = 64,
         dim_out: int = 1,
-        num_layers: int = 4,
+        n_layers: int = 4,
         w0: float = 30.,
         w0_initial: float = 30.,
         use_bias: bool = True,
@@ -417,13 +419,13 @@ class PsfSirenNet(SirenNet):
     ):
         super().__init__()
 
-        self.num_layers = num_layers
+        self.n_layers = n_layers
         self.dim_hidden = dim_hidden
         self.lr = lr
         self.n_sample = n_sample
 
         self.layers = nn.ModuleList([])
-        for ind in range(num_layers):
+        for ind in range(n_layers):
             is_first = ind == 0
             layer_w0 = w0_initial if is_first else w0
             layer_dim_in = dim_in if is_first else dim_hidden
@@ -656,7 +658,7 @@ class TcnnHashMLP(BaseMLP):
 
 class HashMLP(BaseMLP):
     """
-    Model using original encoding for hash grids
+    Model using pure python encoding for hash grids
     """  
     def __init__(self, 
                  dim_in: int, 
@@ -751,11 +753,213 @@ class HashMLP(BaseMLP):
 
     def get_latents(self):
         return self.latents
+      
+    
+class RealGaborLayer(torch.nn.Module):
+    '''
+        Implicit representation with Gabor nonlinearity
+        
+        Inputs;
+            dim_in: Input features
+            dim_out; Output features
+            bias: if True, enable bias for the linear operation
+            is_first: Legacy SIREN parameter
+            omega_0: Legacy SIREN parameter
+            omega: Frequency of Gabor sinusoid term
+            scale: Scaling of Gabor Gaussian term
+    '''
+    
+    def __init__(self, dim_in, dim_out, bias=True,
+                 is_first=False, w0=30.0, c=10.0,
+                 trainable=False):
+        super().__init__()
+        self.omega_0 = w0
+        self.scale_0 = c
+        self.is_first = is_first
+        
+        self.dim_in = dim_in
+        
+        self.freqs = torch.nn.Linear(dim_in, dim_out, bias=bias)
+        self.scale = torch.nn.Linear(dim_in, dim_out, bias=bias)
+        
+    def forward(self, input):
+        omega = self.omega_0 * self.freqs(input)
+        scale = self.scale(input) * self.scale_0
+        
+        return torch.cos(omega)*torch.exp(-(scale**2))
+    
+class ComplexGaborLayer(torch.nn.Module):
+    '''
+        Implicit representation with complex Gabor nonlinearity
+        
+        Inputs;
+            dim_in: Input features
+            dim_out; Output features
+            bias: if True, enable bias for the linear operation
+            is_first: Legacy SIREN parameter
+            omega_0: Legacy SIREN parameter
+            omega0: Frequency of Gabor sinusoid term
+            sigma0: Scaling of Gabor Gaussian term
+            trainable: If True, omega and sigma are trainable parameters
+    '''
+    
+    def __init__(self, dim_in, dim_out, bias=True,
+                 is_first=False, w0=10.0, c=40.0,
+                 trainable=False):
+        super().__init__()
+        self.omega_0 = w0
+        self.scale_0 = c
+        self.is_first = is_first
+        
+        self.dim_in = dim_in
+        
+        if self.is_first:
+            dtype = torch.float
+        else:
+            dtype = torch.cfloat
+            
+        # Set trainable parameters if they are to be simultaneously optimized
+        self.omega_0 = torch.nn.Parameter(self.omega_0*torch.ones(1), trainable)
+        self.scale_0 = torch.nn.Parameter(self.scale_0*torch.ones(1), trainable)
+        
+        self.linear = torch.nn.Linear(dim_in,
+                                dim_out,
+                                bias=bias,
+                                dtype=dtype)
+    
+    def forward(self, input):
+        lin = self.linear(input)
+        omega = self.omega_0 * lin
+        scale = self.scale_0 * lin
+        
+        return torch.exp(1j*omega - scale.abs().square())
+
+class GaborNet(pl.LightningModule):
+    def __init__(
+        self,
+        layer_cls,
+        dim_in,
+        dim_hidden,
+        dim_out,
+        n_layers,
+        sigma,
+        w0,
+        lr,
+        *args,
+        **kwargs
+    ):
+        super().__init__()
+        self.layer_cls = layer_cls
+        self.dim_in = dim_in
+        self.dim_hidden = dim_hidden
+        self.dim_out = dim_out
+        self.n_layers = n_layers
+        self.lr = lr
+        self.sigma = sigma
+        self.w0 = w0
+        
+        layers = []
+        for i in range(self.n_layers):
+            layers.append(self.layer_cls(dim_in=self.dim_in if i == 0 else self.dim_hidden, dim_out=self.dim_out if i == (n_layers -1) else self.dim_hidden, c=self.sigma, w0=self.w0))
+            
+        self.layers = torch.nn.Sequential(*layers)
+        
+    def forward(self, x):
+        return self.layers(x)
+    
+    def configure_optimizers(self):
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr) #weight_decay=1e-5
+        return self.optimizer
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+
+        y_pred = self.forward(x)
+        loss = F.mse_loss(y_pred, y)
+        self.log("train_loss", loss)
+        self.final_loss = float(loss.detach().cpu().numpy()) #parameter used for optuna
+        return loss
+    
+    def predict_step(self, batch, batch_idx):
+        x, y = batch
+        y_pred = self.forward(x)
+        return y_pred
+    
+
+class MultiSiren(pl.LightningModule):
+    """
+    Lightning module for MultiHashMLP. Legacy model
+    Batch size = 1 means whole volume, setup this way as you need the frame idx
+    """
+
+    def __init__(
+        self, dim_in, dim_hidden, dim_out, n_layers, n_frames, lr, *args, **kwargs
+    ):
+        super().__init__()
+        self.dim_in = dim_in
+        self.dim_hidden = dim_hidden
+        self.dim_out = dim_out
+        self.n_layers = n_layers
+        self.n_frames = n_frames
+        self.lr = lr
+        self.losses = []
+
+        self.encoders = nn.ModuleList()
+        for _ in range(self.n_frames):
+            self.encoders.append(
+                SirenNet(
+                    dim_in=self.dim_in,
+                    dim_hidden=self.dim_hidden,
+                    dim_out=self.dim_hidden,
+                    n_layers=self.n_layers,
+                )
+            )
+        self.decoder = SirenNet(
+            dim_in=self.dim_hidden,
+            dim_hidden=self.dim_hidden,
+            dim_out=self.dim_out,
+            n_layers=self.n_layers,
+        )
+
+        self.automatic_optimization = True  # set to False if you need to propagate gradients manually. Usually lightning does a good job at no_grading models not used for a particular training step. Also, grads are not propagated in inctive leaves
+
+    def forward(self, x, frame_idx):
+        z = self.encoders[frame_idx](x)
+        y_pred = self.decoder(z)
+        return y_pred
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-5)
+        return optimizer
+
+    def training_step(self, batch, batch_idx):
+        x, y, frame_idx = batch
+        x = x.squeeze(0)
+        y = y.squeeze(0)
+        z = self.encoders[frame_idx](x)  # pred, model(x)
+        y_pred = self.decoder(z)
+        loss = F.mse_loss(y_pred, y)
+
+        self.losses.append(loss.detach().cpu().numpy())
+
+        self.log("train_loss", loss)
+        return loss
+
+    def predict_step(self, batch, batch_idx):
+        """
+        TODO: adapt for frame adaptive.
+        """
+        x, y, frame_idx = batch
+        x = x.squeeze(0)
+        y = y.squeeze(0)
+        z = self.encoders[frame_idx](x)  # pred, model(x)
+        y_pred = self.decoder(z)
+        return y_pred
     
 
 class MultiHashMLP(pl.LightningModule):
     """
-    Lightning module for MultiHashMLP.
+    Lightning module for MultiHashMLP. Legacy model
     Batch size = 1 means whole volume, setup this way as you need the frame idx
     """
 
@@ -822,77 +1026,6 @@ class MultiHashMLP(pl.LightningModule):
 
     def get_latents(self):
         return self.latents
-
-
-class MultiSiren(pl.LightningModule):
-    """
-    Lightning module for MultiHashMLP.
-    Batch size = 1 means whole volume, setup this way as you need the frame idx
-    """
-
-    def __init__(
-        self, dim_in, dim_hidden, dim_out, num_layers, n_frames, lr, *args, **kwargs
-    ):
-        super().__init__()
-        self.dim_in = dim_in
-        self.dim_hidden = dim_hidden
-        self.dim_out = dim_out
-        self.num_layers = num_layers
-        self.n_frames = n_frames
-        self.lr = lr
-        self.losses = []
-
-        self.encoders = nn.ModuleList()
-        for _ in range(self.n_frames):
-            self.encoders.append(
-                SirenNet(
-                    dim_in=self.dim_in,
-                    dim_hidden=self.dim_hidden,
-                    dim_out=self.dim_hidden,
-                    num_layers=self.num_layers,
-                )
-            )
-        self.decoder = SirenNet(
-            dim_in=self.dim_hidden,
-            dim_hidden=self.dim_hidden,
-            dim_out=self.dim_out,
-            num_layers=self.num_layers,
-        )
-
-        self.automatic_optimization = True  # set to False if you need to propagate gradients manually. Usually lightning does a good job at no_grading models not used for a particular training step. Also, grads are not propagated in inctive leaves
-
-    def forward(self, x, frame_idx):
-        z = self.encoders[frame_idx](x)
-        y_pred = self.decoder(z)
-        return y_pred
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-5)
-        return optimizer
-
-    def training_step(self, batch, batch_idx):
-        x, y, frame_idx = batch
-        x = x.squeeze(0)
-        y = y.squeeze(0)
-        z = self.encoders[frame_idx](x)  # pred, model(x)
-        y_pred = self.decoder(z)
-        loss = F.mse_loss(y_pred, y)
-
-        self.losses.append(loss.detach().cpu().numpy())
-
-        self.log("train_loss", loss)
-        return loss
-
-    def predict_step(self, batch, batch_idx):
-        """
-        TODO: adapt for frame adaptive.
-        """
-        x, y, frame_idx = batch
-        x = x.squeeze(0)
-        y = y.squeeze(0)
-        z = self.encoders[frame_idx](x)  # pred, model(x)
-        y_pred = self.decoder(z)
-        return y_pred
 
 # #######
 # #TESTS#
