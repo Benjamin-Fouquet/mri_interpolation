@@ -1,5 +1,5 @@
 """
-models for implicit representations
+models for implicit representations.
 """
 import math
 from typing import Any
@@ -11,7 +11,6 @@ from pytorch_lightning.utilities.types import STEP_OUTPUT
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pytorch_lightning.utilities.types import LRSchedulerTypeUnion
 from typing import List, Optional, Union, Tuple
 from einops import rearrange
 import rff
@@ -74,7 +73,7 @@ class BaseMLP(pl.LightningModule):
         x, y = batch
         return self(x)
     
-    def lr_schedulers(self) -> LRSchedulerTypeUnion | List[LRSchedulerTypeUnion] | None:
+    def lr_schedulers(self):
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer=self.optimizer, T_max=10, verbose=True
         )

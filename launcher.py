@@ -114,8 +114,6 @@ if config.checkpoint_path:
         use_bias=config.use_bias,
         final_activation=config.final_activation,
         lr=config.lr,
-        config=config.enco_config,
-        n_frames=config.n_frames,
     )
     
 else:
@@ -138,8 +136,6 @@ else:
         use_bias=config.use_bias,
         final_activation=config.final_activation,
         lr=config.lr,
-        config=config.enco_config,
-        n_frames=config.n_frames,
     )
 
 #########################

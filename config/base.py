@@ -60,15 +60,15 @@ class HashConfig(BaseConfig):
     image_path: str = 'sample_ankle_dyn_mri.nii.gz'
     image_shape = nib.load(image_path).shape
     interp_shapes = [(352, 352, 30)]
-    batch_size: int = 20000  # ~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
+    batch_size: int = 10000  # ~max #int(np.prod(image_shape)) #int(np.prod(image_shape)) if len(image_shape) < 4 else 1 #743424 # 28 * 28  #21023600 for 3D mri #80860 for 2D mri#784 for MNIST #2500 for GPU mem ?
     epochs: int = 1
     num_workers: int = os.cpu_count()
     device = [0] if torch.cuda.is_available() else []
     accumulate_grad_batches: MappingProxyType = None
     encoder_type: str = "hash"  
     # Network parameters
-    n_levels: int = 8
-    n_features_per_level: int = 4
+    n_levels: int = 4 #8
+    n_features_per_level: int = 1 #4
     log2_hashmap_size: int = 23
     base_resolution: MappingProxyType = (64, 64, 5)
     finest_resolution: MappingProxyType = (352, 352, 15)
