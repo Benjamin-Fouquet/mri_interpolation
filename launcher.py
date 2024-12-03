@@ -154,7 +154,7 @@ test_loader = datamodule.test_dataloader()
 ################
 
 trainer = pl.Trainer(
-    accelerator='gpu' if torch.cuda.is_available else 'cpu',
+    accelerator='gpu' if torch.cuda.is_available() else 'cpu',
     max_epochs=config.epochs,
     accumulate_grad_batches=dict(config.accumulate_grad_batches)
     if config.accumulate_grad_batches
